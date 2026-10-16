@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+.build/
+# The wildcard matters: intermediate scratch directories are named .build-uni,
+# .build-universal and so on, and each one is several hundred megabytes.
+.build-*/
+build/
+release-local/
+dist/
+
+# Xcode state, for when the package is opened in Xcode rather than built with
+# `swift build`.
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+.swiftpm/
+
+# ---------------------------------------------------------------------------
+# Packaged artifacts
+# ---------------------------------------------------------------------------
+*.dmg
+*.zip
+*.pkg
+
+# ---------------------------------------------------------------------------
+# Credentials and environment
+#
+# ClaudeBridger itself writes credentials to ~/.claude/claudebridger/, never
+# into this repository. These entries are for whatever a contributor happens to
+# have lying around — a test key, a provisioning profile — so that it cannot be
+# committed by accident.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.mobileprovision
+id_rsa*
+id_ed25519*
+secrets.json
+credentials.json
+
+# ---------------------------------------------------------------------------
+# Editor and OS files
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Agent tooling state (plans, session transcripts). These are working notes that
+# can quote local paths and are not part of the project.
+.zcode/
+.claude/
+
+# ---------------------------------------------------------------------------
+# Logs, coverage and temporary files
+# ---------------------------------------------------------------------------
+*.log
+*.profraw
+*.profdata
+tmp/
+*.tmp
+
+# ---------------------------------------------------------------------------
+# Note on docs/
+#
+# docs/ is NOT ignored, unlike the sibling CodexBridger project which keeps its
+# design notes out of the repository. The README links to screenshots under
+# docs/images/, so ignoring the directory would leave every image reference
+# pointing at a file that is not in the checkout.
+# ---------------------------------------------------------------------------

@@ -1,0 +1,3 @@
+import ClaudeBridgerUI
+
+ClaudeBridgerApp.main()
