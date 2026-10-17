@@ -200,6 +200,15 @@ public enum ActivationVerification {
                 )
             }
         }
+        for tier in ModelTier.allCases where tier.supportsDisplayName {
+            let wanted = expected.displayName(for: tier)
+            let actual = snapshot.modelDisplayNames[tier.rawValue]
+            if wanted != actual {
+                result.append(
+                    tier.displayName + "的显示名是 " + (actual ?? "未设置") + "，期望 " + (wanted ?? "未设置")
+                )
+            }
+        }
         if expected.credentialMode != .none, !credential.isEmpty {
             let key = expected.credentialMode == .authToken
                 ? ManagedEnvironment.authToken

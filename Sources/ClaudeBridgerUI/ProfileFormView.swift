@@ -72,11 +72,28 @@ struct ProfileFormView: View {
             ) {
                 VStack(alignment: .leading, spacing: Tokens.spacingM) {
                     ForEach(ModelTier.allCases, id: \.self) { tier in
-                        FormRow(label: tier.displayName, help: tier.explanation) {
-                            TextField(tierPlaceholder(tier), text: binding(for: tier))
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(width: 320)
+                        VStack(alignment: .leading, spacing: Tokens.spacingXS) {
+                            FormRow(label: tier.displayName, help: tier.explanation) {
+                                TextField(tierPlaceholder(tier), text: binding(for: tier))
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(.body, design: .monospaced))
+                                    .frame(width: 320)
+                            }
+                            // Only the four alias tiers have a display-name variable; the main
+                            // conversation and subagent tiers have none, so no field is shown for
+                            // them rather than one that would write a key Claude Code ignores.
+                            if tier.supportsDisplayName {
+                                FormRow(
+                                    label: "  └ 显示名",
+                                    help: "写进 " + (tier.displayNameKey ?? "") + "。只改 /model 选择器里显示的名字，不改变实际请求的模型。留空则使用模型名本身。"
+                                ) {
+                                    TextField("留空 = 用模型名", text: displayNameBinding(for: tier))
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.body)
+                                        .frame(width: 320)
+                                }
+                                .foregroundStyle(.secondary)
+                            }
                         }
                     }
                     Button("一键填满其余档位") {
@@ -137,6 +154,13 @@ struct ProfileFormView: View {
         Binding(
             get: { draft.model(for: tier) ?? "" },
             set: { draft.setModel($0, for: tier) }
+        )
+    }
+
+    private func displayNameBinding(for tier: ModelTier) -> Binding<String> {
+        Binding(
+            get: { draft.displayName(for: tier) ?? "" },
+            set: { draft.setDisplayName($0, for: tier) }
         )
     }
 

@@ -34,6 +34,12 @@ public final class AppModel: ObservableObject {
     @Published public private(set) var notice: Notice?
     /// A confirmation the user has to answer before a switch proceeds.
     @Published public var pendingConfirmation: PendingConfirmation?
+    /// A deletion waiting for the user to confirm it.
+    ///
+    /// Deleting is the one action in this app that destroys something the user typed and cannot be
+    /// recovered from a file on disk: the credential is pruned with the profile. It therefore asks,
+    /// every time, rather than only when the profile looks important.
+    @Published public var pendingDeletion: PendingDeletion?
     /// Load-time problems, e.g. an unreadable state file.
     @Published public private(set) var loadError: String?
     @Published public var language: InterfaceLanguage = .system
@@ -58,6 +64,18 @@ public final class AppModel: ObservableObject {
         public var profileID: String
     }
 
+    /// A deletion the user has asked for and not yet confirmed.
+    public struct PendingDeletion: Equatable, Sendable {
+        public var profileID: String
+        public var profileName: String
+        public var title: String
+        public var message: String
+        public var confirmTitle: String
+        /// True when this profile is the one Claude Code is currently pointed at, which is worth
+        /// saying out loud because deleting it does not undo the configuration it wrote.
+        public var isActive: Bool
+    }
+
     // MARK: - Init
 
     public init(
@@ -80,8 +98,13 @@ public final class AppModel: ObservableObject {
         self.configuration = loaded
         self.loadError = loadFailure
         self.language = loaded.interfaceLanguage
-        self.selectedProfileID = loaded.profiles.first?.id
+        self.selectedProfileID = nil
         self.refreshSnapshot()
+        // Selecting on launch has to go through `selectProfile`, not just set the id. The detail
+        // pane draws from `draft`, so setting only the id leaves the sidebar showing a selected row
+        // next to an empty pane — and clicking that row cannot recover, because SwiftUI does not
+        // call a selection setter when the value it is given is unchanged.
+        selectProfile(loaded.profiles.first?.id)
     }
 
     /// An in-memory instance for previews and tests.
@@ -338,6 +361,42 @@ public final class AppModel: ObservableObject {
         } catch {
             notice = Notice(kind: .failure, title: "新建失败", details: [error.localizedDescription])
         }
+    }
+
+    /// Asks for confirmation before deleting. Nothing is removed until `confirmDeletion`.
+    public func requestDeletion(id: String) {
+        guard let profile = profile(id: id) else { return }
+        let active = isActive(id)
+        var lines = [
+            "将从 ClaudeBridger 里删除「" + profile.name + "」（" + profile.baseURL + "），并一并删除保存的凭据。",
+            "这一步无法撤销。"
+        ]
+        // The distinction that matters: removing the record is not the same as un-configuring
+        // Claude Code, and conflating the two is how someone deletes a backend expecting the
+        // endpoint to revert.
+        if active {
+            lines.append("注意：它当前正在被 Claude Code 使用。删除它不会改回 Claude Code 的配置——settings.json 里写入的内容会保留。要恢复官方配置，请用左下角菜单的「恢复官方配置」。")
+        } else {
+            lines.append("这只删除本软件里的记录，不会改动 Claude Code 的配置文件。")
+        }
+        pendingDeletion = PendingDeletion(
+            profileID: id,
+            profileName: profile.name,
+            title: "删除「" + profile.name + "」？",
+            message: lines.joined(separator: "\n\n"),
+            confirmTitle: "删除",
+            isActive: active
+        )
+    }
+
+    public func confirmDeletion() {
+        guard let pending = pendingDeletion else { return }
+        pendingDeletion = nil
+        deleteProfile(id: pending.profileID)
+    }
+
+    public func cancelDeletion() {
+        pendingDeletion = nil
     }
 
     public func deleteProfile(id: String) {

@@ -7,6 +7,8 @@ public struct SettingsSnapshot: Equatable, Sendable {
     public var baseURL: String?
     /// Every model-tier variable currently set.
     public var models: [String: String]
+    /// Display labels currently set, for the tiers that have a display-name variable.
+    public var modelDisplayNames: [String: String]
     /// Keys from `ManagedEnvironment.clearableKeys` present in `env`.
     public var managedKeysPresent: Set<String>
     /// How many keys the `env` object holds in total, so the screen can say what it is not touching.
@@ -96,6 +98,7 @@ public struct ClaudeSettingsWriter: @unchecked Sendable {
             fileExists: false,
             baseURL: nil,
             models: [:],
+            modelDisplayNames: [:],
             managedKeysPresent: [],
             totalEnvironmentKeys: 0,
             isUnparseable: false,
@@ -138,6 +141,10 @@ public struct ClaudeSettingsWriter: @unchecked Sendable {
         for tier in ModelTier.allCases {
             if let value = document.string(atPath: ["env", tier.environmentKey]) {
                 snapshot.models[tier.rawValue] = value
+            }
+            if let nameKey = tier.displayNameKey,
+               let value = document.string(atPath: ["env", nameKey]) {
+                snapshot.modelDisplayNames[tier.rawValue] = value
             }
         }
         return snapshot
@@ -290,6 +297,15 @@ public struct ClaudeSettingsWriter: @unchecked Sendable {
             if expected != actual {
                 problems.append(
                     tier.displayName + "是 " + (actual ?? "未设置") + "，期望 " + (expected ?? "未设置")
+                )
+            }
+        }
+        for tier in ModelTier.allCases where tier.supportsDisplayName {
+            let expected = profile.displayName(for: tier)
+            let actual = snapshot.modelDisplayNames[tier.rawValue]
+            if expected != actual {
+                problems.append(
+                    tier.displayName + "的显示名是 " + (actual ?? "未设置") + "，期望 " + (expected ?? "未设置")
                 )
             }
         }

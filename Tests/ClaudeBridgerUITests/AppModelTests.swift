@@ -275,3 +275,205 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.activeBaseURL, "https://manually-changed.example")
     }
 }
+
+/// Regression: reopening the app with a saved configuration left the detail pane empty.
+///
+/// `init` restored `selectedProfileID` but never populated `draft`, so the sidebar showed a row as
+/// selected while `DetailView` — which gates on `draft` — drew the empty state. Clicking the row
+/// did nothing either, because SwiftUI does not call a selection setter when the value is
+/// unchanged, so the already-set id never reached `selectProfile`.
+@MainActor
+final class RelaunchSelectionTests: XCTestCase {
+
+    private var root: URL!
+    private var configDirectory: URL!
+    private var home: URL!
+
+    override func setUp() {
+        super.setUp()
+        root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("claudebridger-relaunch-" + UUID().uuidString, isDirectory: true)
+        home = root.appendingPathComponent("home", isDirectory: true)
+        configDirectory = home.appendingPathComponent(".claude", isDirectory: true)
+        try? FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+        root = nil
+        super.tearDown()
+    }
+
+    private func paths() -> ClaudePaths {
+        ClaudePaths(configDirectory: configDirectory, homeDirectory: home)
+    }
+
+    /// Builds a model, saves a profile, and returns a fresh model — as a relaunch would.
+    private func makeRelaunchedModel() -> AppModel {
+        let first = AppModel(paths: paths())
+        first.createProfile(from: BackendPreset.builtIn.first { $0.id == "deepseek" }!)
+        first.selectProfile(first.profiles.first?.id)
+        first.draftCredential = "sk-relaunch-test"
+        XCTAssertTrue(first.saveDraft())
+
+        return AppModel(paths: paths())
+    }
+
+    func testRelaunchSelectsAProfileAndShowsItsDetails() {
+        let model = makeRelaunchedModel()
+
+        XCTAssertEqual(model.profiles.count, 1, "the saved profile must survive a relaunch")
+        XCTAssertNotNil(model.selectedProfileID, "a profile should be selected on launch")
+        XCTAssertNotNil(
+            model.draft,
+            "draft must be populated on launch, or the detail pane renders the empty state"
+        )
+        XCTAssertEqual(model.draft?.name, "DeepSeek")
+        XCTAssertEqual(model.draft?.baseURL, "https://api.deepseek.com/anthropic")
+        XCTAssertEqual(model.draftCredential, "sk-relaunch-test", "the stored credential must come back too")
+    }
+
+    func testRelaunchWithNoProfilesShowsTheEmptyState() {
+        let model = AppModel(paths: paths())
+        XCTAssertNil(model.selectedProfileID)
+        XCTAssertNil(model.draft)
+    }
+
+    /// Re-selecting the row that is already selected must populate the draft, because that is
+    /// exactly what the user does when the pane looks empty.
+    func testReselectingTheSameProfileStillPopulatesTheDraft() {
+        let model = makeRelaunchedModel()
+        let id = try! XCTUnwrap(model.selectedProfileID)
+
+        model.draft = nil
+        model.draftCredential = ""
+        XCTAssertNil(model.draft)
+
+        model.selectProfile(id)
+        XCTAssertNotNil(model.draft, "re-selecting an already-selected profile must load it")
+    }
+}
+
+/// Deletion must never happen without a confirmation.
+///
+/// Deleting is the one action that destroys something the user typed and that no file on disk can
+/// restore: the credential is pruned along with the profile.
+@MainActor
+final class DeletionConfirmationTests: XCTestCase {
+
+    private var root: URL!
+    private var configDirectory: URL!
+    private var home: URL!
+
+    override func setUp() {
+        super.setUp()
+        root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("claudebridger-delete-" + UUID().uuidString, isDirectory: true)
+        home = root.appendingPathComponent("home", isDirectory: true)
+        configDirectory = home.appendingPathComponent(".claude", isDirectory: true)
+        try? FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+        root = nil
+        super.tearDown()
+    }
+
+    private func makeModel() -> AppModel {
+        AppModel(paths: ClaudePaths(configDirectory: configDirectory, homeDirectory: home))
+    }
+
+    private func seededModel() -> AppModel {
+        let model = makeModel()
+        model.createProfile(from: BackendPreset.builtIn.first { $0.id == "deepseek" }!)
+        model.selectProfile(model.profiles.first?.id)
+        model.draftCredential = "sk-delete-test"
+        model.saveDraft()
+        return model
+    }
+
+    func testRequestingDeletionRemovesNothing() {
+        let model = seededModel()
+        let id = model.profiles.first!.id
+
+        model.requestDeletion(id: id)
+
+        XCTAssertNotNil(model.pendingDeletion, "a confirmation must be raised")
+        XCTAssertEqual(model.profiles.count, 1, "nothing may be removed before confirmation")
+    }
+
+    func testConfirmingDeletionRemovesTheProfile() {
+        let model = seededModel()
+        let id = model.profiles.first!.id
+        model.requestDeletion(id: id)
+
+        model.confirmDeletion()
+
+        XCTAssertNil(model.pendingDeletion)
+        XCTAssertTrue(model.profiles.isEmpty)
+    }
+
+    func testCancellingDeletionKeepsTheProfile() {
+        let model = seededModel()
+        let id = model.profiles.first!.id
+        model.requestDeletion(id: id)
+
+        model.cancelDeletion()
+
+        XCTAssertNil(model.pendingDeletion)
+        XCTAssertEqual(model.profiles.count, 1, "cancelling must keep the profile")
+        // The credential survives too, because nothing was pruned.
+        let credentials = CredentialStore(paths: ClaudePaths(configDirectory: configDirectory, homeDirectory: home))
+        XCTAssertEqual(credentials.credential(forProfile: id), "sk-delete-test")
+    }
+
+    func testTheConfirmationSaysDeletionIsIrreversible() {
+        let model = seededModel()
+        model.requestDeletion(id: model.profiles.first!.id)
+        let pending = try! XCTUnwrap(model.pendingDeletion)
+        XCTAssertTrue(pending.message.contains("无法撤销"))
+        XCTAssertTrue(pending.message.contains("DeepSeek"), "it should name the profile")
+        XCTAssertEqual(pending.confirmTitle, "删除")
+    }
+
+    /// Deleting the active backend does not undo the configuration it wrote, and the dialog has to
+    /// say so — otherwise someone deletes it expecting the endpoint to revert.
+    func testTheConfirmationForTheActiveProfileExplainsWhatItDoesNotDo() {
+        let model = seededModel()
+        model.requestActivation()
+        model.confirmPendingActivation()
+        XCTAssertTrue(model.isActive(model.profiles.first!.id))
+
+        model.requestDeletion(id: model.profiles.first!.id)
+
+        let pending = try! XCTUnwrap(model.pendingDeletion)
+        XCTAssertTrue(pending.isActive)
+        XCTAssertTrue(
+            pending.message.contains("settings.json"),
+            "it must explain that the written configuration stays"
+        )
+        XCTAssertTrue(pending.message.contains("恢复官方配置"), "and point at the way to undo it")
+    }
+
+    func testDeletingAnInactiveProfileSaysItDoesNotTouchClaudeCode() {
+        let model = seededModel()
+        model.requestActivation()
+        model.confirmPendingActivation()
+        // A second profile, never activated.
+        model.createProfile(from: BackendPreset.builtIn.first { $0.id == "zhipu" }!)
+        let inactiveID = model.profiles.last!.id
+
+        model.requestDeletion(id: inactiveID)
+
+        let pending = try! XCTUnwrap(model.pendingDeletion)
+        XCTAssertFalse(pending.isActive)
+        XCTAssertTrue(pending.message.contains("不会改动 Claude Code"))
+    }
+
+    func testRequestingDeletionForAnUnknownProfileDoesNothing() {
+        let model = seededModel()
+        model.requestDeletion(id: "does-not-exist")
+        XCTAssertNil(model.pendingDeletion)
+    }
+}

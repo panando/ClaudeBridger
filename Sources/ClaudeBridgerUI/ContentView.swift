@@ -27,6 +27,23 @@ struct ContentView: View {
         } message: {
             Text(model.pendingConfirmation?.message ?? "")
         }
+        // Deletion asks with an alert rather than a second confirmationDialog: SwiftUI renders
+        // only one confirmationDialog per view reliably, and silently dropping this one would be
+        // worse than the extra chrome.
+        .alert(
+            model.pendingDeletion?.title ?? "",
+            isPresented: Binding(
+                get: { model.pendingDeletion != nil },
+                set: { if !$0 { model.cancelDeletion() } }
+            )
+        ) {
+            if let pending = model.pendingDeletion {
+                Button(pending.confirmTitle, role: .destructive) { model.confirmDeletion() }
+                Button(L.cancel(model.language), role: .cancel) { model.cancelDeletion() }
+            }
+        } message: {
+            Text(model.pendingDeletion?.message ?? "")
+        }
     }
 }
 
@@ -188,11 +205,11 @@ struct DetailView: View {
                 Spacer()
                 if let id = model.selectedProfileID {
                     Button(role: .destructive) {
-                        model.deleteProfile(id: id)
+                        model.requestDeletion(id: id)
                     } label: {
                         Label(L.delete(model.language), systemImage: "trash")
                     }
-                    .help("只删除这个软件里的记录，不会动 Claude Code 的配置。")
+                    .help("从 ClaudeBridger 里删除这个后端。会先确认，不会直接删除。")
                 }
             }
             StatusLine(model: model)

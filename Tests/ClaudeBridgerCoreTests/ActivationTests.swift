@@ -148,12 +148,14 @@ final class ActivationVerificationTests: XCTestCase {
         unparseable: Bool = false,
         baseURL: String? = "https://api.deepseek.com/anthropic",
         models: [String: String] = [:],
+        displayNames: [String: String] = [:],
         keys: Set<String> = []
     ) -> SettingsSnapshot {
         SettingsSnapshot(
             fileExists: exists,
             baseURL: baseURL,
             models: models,
+            modelDisplayNames: displayNames,
             managedKeysPresent: keys,
             totalEnvironmentKeys: keys.count,
             isUnparseable: unparseable,

@@ -40,6 +40,18 @@
 
 ---
 
+## 1.0.1 修复了什么
+
+三个问题的修复，都带回归测试：
+
+- **重新打开 App 后右侧空白**：启动了已保存的配置，左侧列表显示选中，右侧却画的是空状态；点那一行也没反应。原因是启动时只恢复了选中项 id，没有装载对应的草稿，而右侧是按草稿渲染的——而且点「已经选中」的那一行，SwiftUI 不会触发选择回调，所以点不动。
+- **删除没有确认**：删除现在会先弹确认框，明确写出「无法撤销」，并区分两种情况——删的是**正在使用**的后端时，会告诉你删除**不会**改回 Claude Code 的配置（那要用「恢复官方配置」）；删的是没在用的，会告诉你不会动配置文件。
+- **新增模型显示名**：可以给 Opus / Sonnet / Haiku / Fable 四档设显示名（`ANTHROPIC_DEFAULT_*_MODEL_NAME`），只改 `/model` 选择器里显示的文字，不改变实际请求的模型。切换后端时旧的显示名会被清除，不会再出现「写着 MiniMax，实际请求 DeepSeek」这种名不副实的情况。
+
+> 这四个键是**专门**存在的：Claude Code 没有 `ANTHROPIC_MODEL_NAME`，也没有子 Agent 的显示名变量，所以主对话和子 Agent 两档不显示这个输入框——而不是写一个 Claude Code 会忽略的键。
+
+---
+
 ## 它解决什么问题
 
 Claude Code 只认 Anthropic Messages API。任何能说这个协议的服务都能当它的后端，切换方式是把 `ANTHROPIC_BASE_URL` 之类的环境变量写进配置文件。听起来简单，实际手动做的时候每一步都有坑：
@@ -163,6 +175,7 @@ claude "你好"
 - **一键新建**：内置 DeepSeek、智谱 GLM、Kimi（开放平台与会员订阅）、阿里云百炼通义、自定义共六个预设，每个都带出处说明，模型档位一次性填满。
 - **实时状态**：顶部始终显示 Claude Code 当前指向的地址。这个值**从文件里读**，不来自软件自己的记录——所以如果你在别处手动改了 `settings.json`，这里会如实反映出来。
 - **切换保护**：如果当前指向的是一个本软件不管理的地址（比如你手写的配置），启用新后端前会弹确认框，并告诉你原文件会被备份。
+- **删除保护**：删除后端前一定先确认，并说明后果。删的是正在使用的后端时，会明确告诉你删除**不会**改回 Claude Code 的配置。
 - **恢复官方配置**：一键清除 `settings.json` 里 ClaudeBridger 写入的所有键，回到官方默认。同样先备份。
 - **地址校验**：表单里当场警告三种会出问题的地址——结尾带 `/v1`、指向本机、用明文 `http` 发送凭据。
 - **保存与启用分离**：`保存` 只写 ClaudeBridger 自己的记录文件，不碰任何 Claude Code 读的文件；`启用` 才写入并备份。改了设置但没保存时，启用按钮会禁用并说明原因。
@@ -180,9 +193,13 @@ ClaudeBridger 只会写下面这些键。`env` 块里其他任何东西都不动
 | `ANTHROPIC_API_KEY` | 凭据（选 API Key 方式时） |
 | `ANTHROPIC_MODEL` | 主对话 |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus 档 |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL_NAME` | Opus 档的显示名（只影响 `/model` 选择器） |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet 档 |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL_NAME` | Sonnet 档的显示名（只影响 `/model` 选择器） |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | Haiku 档（后台任务） |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME` | Haiku 档的显示名（只影响 `/model` 选择器） |
 | `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable 档（自动降级） |
+| `ANTHROPIC_DEFAULT_FABLE_MODEL_NAME` | Fable 档的显示名（只影响 `/model` 选择器） |
 | `CLAUDE_CODE_SUBAGENT_MODEL` | 子 Agent |
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 上下文窗口 |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 上下文窗口 |
@@ -282,7 +299,7 @@ Haiku 档没配。它对应 `ANTHROPIC_DEFAULT_HAIKU_MODEL`，专门给后台任
 
 ```bash
 swift build            # 构建
-swift test             # 107 个测试
+swift test             # 129 个测试
 swift run ClaudeBridger
 ```
 

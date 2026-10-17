@@ -320,3 +320,92 @@ final class ClaudeSettingsWriterTests: XCTestCase {
         XCTAssertEqual(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "1048576")
     }
 }
+
+/// Display names, end to end through a real write.
+final class DisplayNameWriteTests: XCTestCase {
+
+    private var home: TestHome!
+
+    override func setUp() {
+        super.setUp()
+        home = TestHome()
+    }
+
+    override func tearDown() {
+        home.cleanup()
+        home = nil
+        super.tearDown()
+    }
+
+    private func writer() -> ClaudeSettingsWriter {
+        ClaudeSettingsWriter(paths: home.paths)
+    }
+
+    private func profileWithDisplayNames() -> BackendProfile {
+        var profile = makeProfile()
+        profile.setModel("glm-5.3-flash[1m]", for: .opus)
+        profile.setDisplayName("GLM 5.3 Flash", for: .opus)
+        profile.setDisplayName("DeepSeek Flash", for: .haiku)
+        return profile
+    }
+
+    func testDisplayNamesReachTheFileAndVerify() throws {
+        let profile = profileWithDisplayNames()
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+
+        let env = home.environment(in: home.read())
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"], "GLM 5.3 Flash")
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"], "DeepSeek Flash")
+        XCTAssertNotNil(home.parseJSON(home.read()))
+        XCTAssertEqual(writer().verify(expected: profile, credential: "sk"), [])
+    }
+
+    /// The reported bug, as a test: a stale label from a previous setup must not survive.
+    func testSwitchingClearsStaleDisplayNamesFromThePreviousBackend() throws {
+        home.write(settings: """
+        {
+          "env": {
+            "ANTHROPIC_BASE_URL": "https://old.example",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "old-model",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME": "55b1070d-1b41-4e8c-a555-29747704a148:Some Old Label",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME": "55b1070d-1b41-4e8c-a555-29747704a148:MiniMax-M3",
+            "KEEP_ME": "yes"
+          }
+        }
+        """)
+
+        // The new profile sets models but no labels, so the labels must disappear.
+        var next = BackendProfile(id: "next", name: "Next", baseURL: "https://new.example")
+        next.setModel("deepseek-v4.1-flash[1m]", for: .primary)
+        next.setModel("deepseek-v4.1-flash[1m]", for: .opus)
+        _ = try writer().activate(profile: next, credential: "sk", writeOnboardingFlag: false)
+
+        let env = home.environment(in: home.read())
+        XCTAssertNil(env["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"], "the stale label must be cleared")
+        XCTAssertNil(env["ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"])
+        XCTAssertEqual(env["ANTHROPIC_DEFAULT_OPUS_MODEL"], "deepseek-v4.1-flash[1m]")
+        XCTAssertEqual(env["KEEP_ME"], "yes", "unmanaged keys still survive")
+    }
+
+    func testVerificationCatchesAMismatchedLabel() throws {
+        let profile = profileWithDisplayNames()
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+        // Someone edits the label behind our back.
+        home.write(settings: home.read().replacingOccurrences(
+            of: "GLM 5.3 Flash", with: "Wrong Label"
+        ))
+        let problems = writer().verify(expected: profile, credential: "sk")
+        XCTAssertTrue(problems.contains { $0.contains("显示名") }, "got: \(problems)")
+    }
+
+    func testLabelsAreNotWrittenForTiersWithoutAModel() throws {
+        var profile = BackendProfile(id: "x", name: "X", baseURL: "https://x.example")
+        profile.setModel("m", for: .primary)
+        profile.setDisplayName("orphan", for: .opus)  // no opus model
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+
+        let env = home.environment(in: home.read())
+        XCTAssertNil(env["ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"])
+        XCTAssertNil(env["ANTHROPIC_MODEL_NAME"], "there is no such variable")
+    }
+}

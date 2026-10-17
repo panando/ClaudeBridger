@@ -40,6 +40,18 @@ Fill in an endpoint, a credential and the models, click Activate, and the config
 
 ---
 
+## What 1.0.1 fixes
+
+Three fixes, each with a regression test:
+
+- **A blank detail pane after reopening the app.** A saved configuration was restored, the sidebar showed a row as selected, and the right-hand pane drew the empty state; clicking that row did nothing. The cause: launch restored the selected id but never loaded the corresponding draft, and the pane renders from the draft. Clicking the already-selected row could not recover either, because SwiftUI does not call a selection setter when the value it is given is unchanged.
+- **Deletion had no confirmation.** Deleting now raises a confirmation that says the action cannot be undone, and distinguishes two cases: deleting the backend **in use** tells you that deleting it does **not** revert Claude Code's configuration (that is what "restore official configuration" is for), while deleting an unused one tells you the config file is untouched.
+- **Model display names.** You can now set a display label for the Opus / Sonnet / Haiku / Fable tiers (`ANTHROPIC_DEFAULT_*_MODEL_NAME`). It changes only the text shown in the `/model` picker, not which model is requested. Switching backends clears the previous labels, so the picker can no longer advertise one model while the requests go to another.
+
+> Those four variables exist for a reason: Claude Code defines no `ANTHROPIC_MODEL_NAME` and no subagent display-name variable, so the main-conversation and subagent tiers show no such field. Writing a key Claude Code ignores would be worse than writing nothing, because it looks like it works.
+
+---
+
 ## The problem it solves
 
 Claude Code speaks one protocol: the Anthropic Messages API. Any service that speaks it can be its backend, and switching means writing environment variables such as `ANTHROPIC_BASE_URL` into a config file. That sounds simple. Done by hand, every step has a trap:
@@ -163,6 +175,7 @@ To see exactly what was written, run `/status` inside Claude Code and check the 
 - **One-click creation**: six built-in presets — DeepSeek, Zhipu GLM, Kimi (both the open platform and the membership plan), Alibaba Cloud DashScope Qwen, and a blank custom entry — each citing where its endpoint was confirmed, and each filling every model tier.
 - **Live status**: the address Claude Code currently points at is shown at all times. It is read **from the file**, not from this app's own record, so a `settings.json` you edited elsewhere is reported as it actually is.
 - **Switch protection**: when the current address is one this app does not manage (a configuration you wrote by hand, say), activating a new backend asks for confirmation first and tells you the original will be backed up.
+- **Delete protection**: deleting a backend always confirms first and states the consequences. When the backend is the one in use, it says plainly that deleting it does **not** revert Claude Code's configuration.
 - **Restore official configuration**: clears every key ClaudeBridger wrote from `settings.json`, returning Claude Code to its defaults. Also takes a backup first.
 - **Address validation**: the form warns on the spot about the three address shapes that break things — a trailing `/v1`, a loopback host, and plain `http` carrying your credential in the clear.
 - **Save and Activate are separate**: `Save` writes only ClaudeBridger's own record file and touches nothing Claude Code reads; `Activate` is what writes and backs up. When you have unsaved edits, the Activate button is disabled and says why.
@@ -180,9 +193,13 @@ ClaudeBridger writes only the keys below. Nothing else in the `env` block is tou
 | `ANTHROPIC_API_KEY` | The credential, when API Key is selected |
 | `ANTHROPIC_MODEL` | Main conversation |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus tier |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL_NAME` | Opus tier display label (affects only the `/model` picker) |
 | `ANTHROPIC_DEFAULT_SONNET_MODEL` | Sonnet tier |
+| `ANTHROPIC_DEFAULT_SONNET_MODEL_NAME` | Sonnet tier display label (affects only the `/model` picker) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | Haiku tier (background tasks) |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME` | Haiku tier display label (affects only the `/model` picker) |
 | `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable tier (automatic fallback) |
+| `ANTHROPIC_DEFAULT_FABLE_MODEL_NAME` | Fable tier display label (affects only the `/model` picker) |
 | `CLAUDE_CODE_SUBAGENT_MODEL` | Subagents |
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Context window |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Context window |
@@ -282,7 +299,7 @@ Requires the Xcode command line tools (Swift 5.9+).
 
 ```bash
 swift build            # build
-swift test             # 107 tests
+swift test             # 129 tests
 swift run ClaudeBridger
 ```
 

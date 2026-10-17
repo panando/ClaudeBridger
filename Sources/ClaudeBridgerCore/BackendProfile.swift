@@ -58,6 +58,24 @@ public enum ModelTier: String, Codable, CaseIterable, Sendable {
         case .subagent: return "子 Agent 执行的模型。不配置会让子任务失败或明显变差。"
         }
     }
+
+    /// The variable that overrides this tier's label in the `/model` picker, when one exists.
+    ///
+    /// Only the four alias tiers have a display-name variable. There is no `ANTHROPIC_MODEL_NAME`
+    /// and no subagent equivalent in the official reference, so this returns nil for those two and
+    /// the app must not invent them.
+    public var displayNameKey: String? {
+        switch self {
+        case .opus: return "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"
+        case .sonnet: return "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"
+        case .haiku: return "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"
+        case .fable: return "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME"
+        case .primary, .subagent: return nil
+        }
+    }
+
+    /// Whether this tier can carry a display name at all.
+    public var supportsDisplayName: Bool { displayNameKey != nil }
 }
 
 /// Every environment key ClaudeBridger is allowed to write or remove.
@@ -95,6 +113,15 @@ public enum ManagedEnvironment {
     /// Every model-tier variable, derived so the two lists can never drift apart.
     public static var modelTierKeys: [String] { ModelTier.allCases.map(\.environmentKey) }
 
+    /// The display-name variables for the tiers that have one.
+    ///
+    /// These are managed because they are part of pointing Claude Code at a third-party backend:
+    /// a leftover label from a previous gateway is what makes the `/model` picker show a name that
+    /// has nothing to do with the model actually being requested.
+    public static var modelDisplayNameKeys: [String] {
+        ModelTier.allCases.compactMap(\.displayNameKey)
+    }
+
     /// Everything ClaudeBridger may write.
     public static var writableKeys: Set<String> {
         Set([
@@ -104,7 +131,7 @@ public enum ManagedEnvironment {
             maxContextTokens,
             disableNonessentialTraffic,
             effortLevel
-        ]).union(modelTierKeys)
+        ]).union(modelTierKeys).union(modelDisplayNameKeys)
     }
 
     /// Everything ClaudeBridger may remove. The credential key is here but not in `writableKeys`:
@@ -179,6 +206,13 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
     /// would otherwise resolve.
     public var models: [String: String]
 
+    /// Optional display label per tier, for the tiers that support one.
+    ///
+    /// This is what the `/model` picker shows. It changes nothing about which model is requested,
+    /// but leaving a stale label behind is confusing in a specific way: the picker then advertises
+    /// one model while the requests go to another.
+    public var modelDisplayNames: [String: String]
+
     /// Pins the context window. nil means do not write either variable, which lets the model's
     /// own documented default apply.
     public var contextWindow: Int?
@@ -194,6 +228,7 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
         credentialMode: CredentialMode = .authToken,
         credential: String = "",
         models: [String: String] = [:],
+        modelDisplayNames: [String: String] = [:],
         contextWindow: Int? = nil,
         disableNonessentialTraffic: Bool = true,
         effortLevel: EffortLevel? = nil
@@ -205,6 +240,7 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
         self.credentialMode = credentialMode
         self.credential = credential
         self.models = models
+        self.modelDisplayNames = modelDisplayNames
         self.contextWindow = contextWindow
         self.disableNonessentialTraffic = disableNonessentialTraffic
         self.effortLevel = effortLevel
@@ -222,6 +258,24 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
             models[tier.rawValue] = trimmed
         } else {
             models.removeValue(forKey: tier.rawValue)
+        }
+    }
+
+    /// The display label for `tier`, or nil when none is set or the tier has no such variable.
+    public func displayName(for tier: ModelTier) -> String? {
+        guard tier.supportsDisplayName else { return nil }
+        let raw = modelDisplayNames[tier.rawValue]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let raw, !raw.isEmpty else { return nil }
+        return raw
+    }
+
+    public mutating func setDisplayName(_ value: String?, for tier: ModelTier) {
+        guard tier.supportsDisplayName else { return }
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            modelDisplayNames[tier.rawValue] = trimmed
+        } else {
+            modelDisplayNames.removeValue(forKey: tier.rawValue)
         }
     }
 
@@ -246,6 +300,11 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
         for tier in ModelTier.allCases {
             if let value = model(for: tier) {
                 pairs.append((tier.environmentKey, value))
+                // Emitted next to its model so the written block reads as a pair, and so a label
+                // can never outlive the model it describes.
+                if let label = displayName(for: tier), let nameKey = tier.displayNameKey {
+                    pairs.append((nameKey, label))
+                }
             }
         }
         if let window = contextWindow {
@@ -265,7 +324,8 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
     ///
     /// The credential is deliberately excluded: comparing secrets would make a password field
     /// look dirty just because it was retyped, and the question this answers is about the shape
-    /// of the configuration, not the value of the key.
+    /// of the configuration, not the value of the key. Display names are included, because they
+    /// are written to the file and changing one is a reason to write.
     public func hasSamePublishedSettings(as other: BackendProfile) -> Bool {
         var lhs = self
         var rhs = other
@@ -294,6 +354,7 @@ public struct StoredProfile: Codable, Equatable, Sendable {
     public var baseURL: String
     public var credentialMode: CredentialMode
     public var models: [String: String]
+    public var modelDisplayNames: [String: String]
     public var contextWindow: Int?
     public var disableNonessentialTraffic: Bool
     public var effortLevel: EffortLevel?
@@ -305,9 +366,28 @@ public struct StoredProfile: Codable, Equatable, Sendable {
         baseURL = profile.baseURL
         credentialMode = profile.credentialMode
         models = profile.models
+        modelDisplayNames = profile.modelDisplayNames
         contextWindow = profile.contextWindow
         disableNonessentialTraffic = profile.disableNonessentialTraffic
         effortLevel = profile.effortLevel
+    }
+
+    /// Hand-written so a config saved before display names existed still decodes.
+    ///
+    /// The synthesised decoder throws on a missing key, which would turn "new field" into "your
+    /// saved backends are gone" for anyone upgrading.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        category = try container.decodeIfPresent(String.self, forKey: .category) ?? BackendPreset.customCategory
+        baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+        credentialMode = try container.decodeIfPresent(CredentialMode.self, forKey: .credentialMode) ?? .authToken
+        models = try container.decodeIfPresent([String: String].self, forKey: .models) ?? [:]
+        modelDisplayNames = try container.decodeIfPresent([String: String].self, forKey: .modelDisplayNames) ?? [:]
+        contextWindow = try container.decodeIfPresent(Int.self, forKey: .contextWindow)
+        disableNonessentialTraffic = try container.decodeIfPresent(Bool.self, forKey: .disableNonessentialTraffic) ?? true
+        effortLevel = try container.decodeIfPresent(EffortLevel.self, forKey: .effortLevel)
     }
 
     public func profile(credential: String) -> BackendProfile {
@@ -319,6 +399,7 @@ public struct StoredProfile: Codable, Equatable, Sendable {
             credentialMode: credentialMode,
             credential: credential,
             models: models,
+            modelDisplayNames: modelDisplayNames,
             contextWindow: contextWindow,
             disableNonessentialTraffic: disableNonessentialTraffic,
             effortLevel: effortLevel

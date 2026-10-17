@@ -6,6 +6,11 @@ final class ManagedEnvironmentTests: XCTestCase {
     /// The safety boundary. If a key is not on this list the app must never write it, and the
     /// test that matters is that the list does not quietly grow to include something that belongs
     /// to the user.
+    ///
+    /// This is a deliberate, exhaustive list rather than a count, so widening the boundary has to
+    /// be an explicit edit here. The four `_MODEL_NAME` entries were added in 1.0.1 to fix stale
+    /// `/model` picker labels; note there is no `ANTHROPIC_MODEL_NAME` or subagent equivalent,
+    /// because Claude Code defines none.
     func testWritableKeysAreTheWiringOnes() {
         XCTAssertEqual(
             ManagedEnvironment.writableKeys.sorted(),
@@ -13,9 +18,13 @@ final class ManagedEnvironmentTests: XCTestCase {
                 "ANTHROPIC_AUTH_TOKEN",
                 "ANTHROPIC_BASE_URL",
                 "ANTHROPIC_DEFAULT_FABLE_MODEL",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
                 "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
                 "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
                 "ANTHROPIC_MODEL",
                 "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
@@ -188,5 +197,92 @@ final class BackendPresetTests: XCTestCase {
         XCTAssertEqual(byID["moonshot"], "https://api.moonshot.cn/anthropic")
         XCTAssertEqual(byID["kimi-code"], "https://api.kimi.com/coding/")
         XCTAssertEqual(byID["dashscope"], "https://dashscope.aliyuncs.com/apps/anthropic")
+    }
+}
+
+/// The display-name family, which exists for exactly four tiers.
+///
+/// Claude Code's reference lists `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL_NAME`. There
+/// is no `ANTHROPIC_MODEL_NAME` and no subagent variant, so the app must never write one: a key
+/// Claude Code ignores is worse than no key, because it looks like it works.
+final class ModelDisplayNameTests: XCTestCase {
+
+    func testOnlyTheFourAliasTiersSupportADisplayName() {
+        XCTAssertTrue(ModelTier.opus.supportsDisplayName)
+        XCTAssertTrue(ModelTier.sonnet.supportsDisplayName)
+        XCTAssertTrue(ModelTier.haiku.supportsDisplayName)
+        XCTAssertTrue(ModelTier.fable.supportsDisplayName)
+
+        XCTAssertFalse(ModelTier.primary.supportsDisplayName)
+        XCTAssertFalse(ModelTier.subagent.supportsDisplayName)
+        XCTAssertNil(ModelTier.primary.displayNameKey)
+        XCTAssertNil(ModelTier.subagent.displayNameKey)
+    }
+
+    func testDisplayNameKeysMatchTheOfficialNames() {
+        XCTAssertEqual(ModelTier.opus.displayNameKey, "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME")
+        XCTAssertEqual(ModelTier.sonnet.displayNameKey, "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME")
+        XCTAssertEqual(ModelTier.haiku.displayNameKey, "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME")
+        XCTAssertEqual(ModelTier.fable.displayNameKey, "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME")
+    }
+
+    /// The exact mistake this guards: inventing an `ANTHROPIC_MODEL_NAME`.
+    func testNoInventedKeysAreEverWritten() {
+        var profile = makeProfile()
+        profile.setDisplayName("x", for: .primary)
+        profile.setDisplayName("x", for: .subagent)
+        let keys = Set(profile.environmentValues().map(\.key))
+        XCTAssertFalse(keys.contains("ANTHROPIC_MODEL_NAME"))
+        XCTAssertFalse(keys.contains("CLAUDE_CODE_SUBAGENT_MODEL_NAME"))
+        XCTAssertTrue(profile.modelDisplayNames.isEmpty, "an unsupported tier must not store a label")
+    }
+
+    func testDisplayNamesAreEmittedBesideTheirModel() {
+        var profile = makeProfile()
+        profile.setModel("glm-5.3-flash[1m]", for: .opus)
+        profile.setDisplayName("GLM 5.3 Flash", for: .opus)
+        let pairs = profile.environmentValues()
+        let keys = pairs.map(\.key)
+        let modelIndex = try! XCTUnwrap(keys.firstIndex(of: "ANTHROPIC_DEFAULT_OPUS_MODEL"))
+        let nameIndex = try! XCTUnwrap(keys.firstIndex(of: "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
+        XCTAssertEqual(nameIndex, modelIndex + 1, "the label should follow its model")
+        XCTAssertEqual(pairs[nameIndex].value, "GLM 5.3 Flash")
+    }
+
+    /// A label without a model would describe nothing, so it is not emitted.
+    func testADisplayNameIsNotEmittedWithoutItsModel() {
+        var profile = BackendProfile(id: "x", name: "X", baseURL: "https://x.example")
+        profile.setDisplayName("orphan label", for: .opus)
+        let keys = Set(profile.environmentValues().map(\.key))
+        XCTAssertFalse(keys.contains("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"))
+    }
+
+    func testDisplayNameKeysAreInsideTheManagedBoundary() {
+        for tier in ModelTier.allCases where tier.supportsDisplayName {
+            let key = try! XCTUnwrap(tier.displayNameKey)
+            XCTAssertTrue(ManagedEnvironment.writableKeys.contains(key), key)
+            XCTAssertTrue(ManagedEnvironment.clearableKeys.contains(key), key)
+        }
+    }
+
+    func testBlankDisplayNameIsTreatedAsUnset() {
+        var profile = makeProfile()
+        profile.setDisplayName("   ", for: .opus)
+        XCTAssertNil(profile.displayName(for: .opus))
+        profile.setDisplayName("  Trimmed  ", for: .opus)
+        XCTAssertEqual(profile.displayName(for: .opus), "Trimmed")
+    }
+
+    func testChangingADisplayNameCountsAsAPublishedChange() {
+        var a = makeProfile()
+        var b = makeProfile()
+        XCTAssertTrue(a.hasSamePublishedSettings(as: b))
+        b.setDisplayName("Different label", for: .haiku)
+        XCTAssertFalse(
+            a.hasSamePublishedSettings(as: b),
+            "a display name is written to the file, so changing it is a real change"
+        )
+        a.setDisplayName("Different label", for: .haiku)
+        XCTAssertTrue(a.hasSamePublishedSettings(as: b))
     }
 }
