@@ -23,7 +23,9 @@ BUNDLE_ID="com.claudebridger.app"
 ICON_SOURCE="$ROOT/ClaudeBridger.icns"
 
 echo "==> Building release binary"
-swift build -c release --package-path "$ROOT"
+# Named product rather than the whole package: the package also holds ScreenshotRenderer, which
+# is a build-time tool for the README images and has no business in a release build.
+swift build -c release --package-path "$ROOT" --product "$APP_NAME"
 
 BINARY="$(swift build -c release --package-path "$ROOT" --show-bin-path)/$APP_NAME"
 if [ ! -x "$BINARY" ]; then

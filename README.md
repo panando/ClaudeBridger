@@ -40,15 +40,25 @@
 
 ---
 
-## 1.0.1 修复了什么
+## 1.1.0 新增了什么
 
-三个问题的修复，都带回归测试：
+界面上能配的东西，从「端点 + 凭据 + 模型」扩到 Claude Code 自己那一批环境变量。但**只扩展 `env` 块**——`permissions`、`hooks`、`statusLine` 这些顶层键依然一个都不碰。
 
-- **重新打开 App 后右侧空白**：启动了已保存的配置，左侧列表显示选中，右侧却画的是空状态；点那一行也没反应。原因是启动时只恢复了选中项 id，没有装载对应的草稿，而右侧是按草稿渲染的——而且点「已经选中」的那一行，SwiftUI 不会触发选择回调，所以点不动。
-- **删除没有确认**：删除现在会先弹确认框，明确写出「无法撤销」，并区分两种情况——删的是**正在使用**的后端时，会告诉你删除**不会**改回 Claude Code 的配置（那要用「恢复官方配置」）；删的是没在用的，会告诉你不会动配置文件。
-- **新增模型显示名**：可以给 Opus / Sonnet / Haiku / Fable 四档设显示名（`ANTHROPIC_DEFAULT_*_MODEL_NAME`），只改 `/model` 选择器里显示的文字，不改变实际请求的模型。切换后端时旧的显示名会被清除，不会再出现「写着 MiniMax，实际请求 DeepSeek」这种名不副实的情况。
+新增三组，都放在默认折叠的卡片里，不影响「填地址、填凭据、点启用」这条主线：
 
-> 这四个键是**专门**存在的：Claude Code 没有 `ANTHROPIC_MODEL_NAME`，也没有子 Agent 的显示名变量，所以主对话和子 Agent 两档不显示这个输入框——而不是写一个 Claude Code 会忽略的键。
+- **行为开关（11 个）**：关闭非必要流量、关闭自动更新、关闭内置 skills、关闭上下文压缩、关闭 1M 上下文、不修改终端标题、关闭 extra usage 命令、实验性 Agent Teams、输出会话状态事件、省略系统提示里的署名块、关闭 token 用量提醒。
+- **加载方式与提示词**：MCP 工具加载方式、系统提示词长度。这两个键取值不是简单的开关，缺省本身也有含义，所以做成下拉而不是开关。
+- **超时与限额**：单次最大输出 tokens、API 超时、Bash 命令最大超时、触发自动压缩的百分比，以及自定义请求头（多行 `Name: Value`，中转服务常要用）。
+
+每个开关都标了**来源**：官方文档里查得到的标「官方文档」；只在第三方客户端里见到、官方文档没列的标「第三方实现」，并且默认关闭——不替用户打开一个没验证过的东西。另外每个模型档位多了一个 **1M 勾选框**：它不新增任何存储字段，只是在模型名那串字符串上增删 `[1m]` 后缀，所以现有配置里的 `deepseek-v4-pro[1m]` 打开表单就是已勾选状态。
+
+### 顺带修掉的一个会丢数据的坑
+
+扩充受管键的时候差点引入一个静默丢数据的 bug。`API_TIMEOUT_MS`、`BASH_MAX_TIMEOUT_MS`、`CLAUDE_CODE_MAX_OUTPUT_TOKENS`、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 这四个键，用户经常自己在文件里手调——你那份 `settings.json` 里就设着 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "87"`。如果把它们当普通受管键，切换后端时它们会被**静默删掉**。
+
+现在这四个键归**用户所有**：表单要写就写，但**永远不会被清除**，切后端和恢复官方配置都不会。恢复官方配置时，弹窗会明确列出哪些键因为属于你自己而被留下，而不是让你事后去发现少了什么。
+
+> 1.0.1 修的是另外三个问题：重开 App 后右侧空白、删除无确认、以及新增模型显示名（`ANTHROPIC_DEFAULT_*_MODEL_NAME`，只改 `/model` 选择器里的文字，不改变实际请求的模型）。
 
 ---
 
@@ -69,8 +79,11 @@ ClaudeBridger 把这一串变成一次点击，并且在写入前备份、写入
 
 ## 特色
 
-**只改接线用的那 12 个环境变量键，其余逐字节保留。**
+**只改 33 个受管的环境变量键，其余逐字节保留。**
 `env` 块是 Claude Code 给自己和它启动的每个子进程用的通用环境变量区，用户完全可能在里面放代理设置、超时、自己的变量。内置的 JSON 编辑器记录每个值在原文里的字节区间，只替换被点名的区间——改一个值只动一行，加一个键只插一行。有测试断言「替换后与原文相比只差一行」。用户手写的注释、拖尾逗号、缩进风格全部原样活着。
+
+**有四个键归你，不归软件。**
+`API_TIMEOUT_MS`、`BASH_MAX_TIMEOUT_MS`、`CLAUDE_CODE_MAX_OUTPUT_TOKENS`、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` 是最常被手工调的一批。表单要写它们时会写，但**永远不会删除**：切后端不删，恢复官方配置也不删。切换后端时，上一个后端留下的其余键会被清掉，只留这四个。
 
 **每次写入前自动备份，包括在软件自己管理的两个后端之间切换。**
 唯一的破坏性操作也有退路。备份文件名带后端标识和时间戳，同一分钟内连续备份自动加序号，不覆盖。
@@ -91,7 +104,7 @@ Claude Code 按场景分别调用不同档位的模型，只配主对话会让�
 </p>
 
 <p align="center">
-  <img src="docs/images/app-form.png" alt="后端配置表单：Base URL 区域含名称、地址、凭据方式与凭据；模型区域为六个档位各一个输入框；高级区域含上下文窗口、思考档位与关闭非必要流量开关" width="620">
+  <img src="docs/images/app-options.png" alt="后端配置表单展开后：Base URL、模型（每档带 1M 勾选框与显示名）、高级（上下文窗口、思考档位），以及默认折叠的行为开关卡片——十一个开关各带来源标注和说明，未文档化的那个单独分组并标为「第三方实现」——和加载方式与提示词卡片" width="760">
 </p>
 
 界面使用中英双语，跟随系统语言。
@@ -121,7 +134,7 @@ Claude Code 按场景分别调用不同档位的模型，只配主对话会让�
 
 ### 下载
 
-从 [Releases](https://github.com/panando/ClaudeBridger/releases) 下载 `ClaudeBridger-1.0.0.dmg`，打开后把 ClaudeBridger 拖进「应用程序」文件夹。
+从 [Releases](https://github.com/panando/ClaudeBridger/releases) 下载 `ClaudeBridger-1.1.0.dmg`，打开后把 ClaudeBridger 拖进「应用程序」文件夹。
 
 ### 首次打开会被系统拦下（当前没有开发者签名）
 
@@ -184,13 +197,14 @@ claude "你好"
 
 ### 写入的环境变量
 
-ClaudeBridger 只会写下面这些键。`env` 块里其他任何东西都不动。
+ClaudeBridger 只会写下面这 33 个键。`env` 块里其他任何东西都不动。
+
+**接线（13 个）**
 
 | 环境变量 | 来源 |
 | --- | --- |
 | `ANTHROPIC_BASE_URL` | 表单里的 Base URL |
 | `ANTHROPIC_AUTH_TOKEN` | 凭据（选 Bearer Token 方式时） |
-| `ANTHROPIC_API_KEY` | 凭据（选 API Key 方式时） |
 | `ANTHROPIC_MODEL` | 主对话 |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus 档 |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL_NAME` | Opus 档的显示名（只影响 `/model` 选择器） |
@@ -201,12 +215,53 @@ ClaudeBridger 只会写下面这些键。`env` 块里其他任何东西都不动
 | `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable 档（自动降级） |
 | `ANTHROPIC_DEFAULT_FABLE_MODEL_NAME` | Fable 档的显示名（只影响 `/model` 选择器） |
 | `CLAUDE_CODE_SUBAGENT_MODEL` | 子 Agent |
-| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 上下文窗口 |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 上下文窗口 |
-| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | 「关闭非必要流量」开关 |
-| `CLAUDE_CODE_EFFORT_LEVEL` | 思考档位 |
+| `ANTHROPIC_CUSTOM_HEADERS` | 自定义请求头（多行 `Name: Value`） |
 
 `ANTHROPIC_API_KEY` 特殊：**只能被清除，永远不会被写入**。它和 `ANTHROPIC_AUTH_TOKEN` 同时存在会导致 401，所以切换到 Bearer Token 方式时总会把残留的那个清掉。
+
+**行为开关（11 个）**
+
+「关闭」类的键写 `1`；`CLAUDE_CODE_ATTRIBUTION_HEADER` 是反的，开启「省略署名块」写 `0`。关闭一个开关不会写入任何值，所以上一次开启留下的键会在下次启用时被清掉。
+
+| 环境变量 | 界面上的开关 | 来源 |
+| --- | --- | --- |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | 关闭非必要流量 | 官方文档 |
+| `DISABLE_AUTOUPDATER` | 关闭自动更新 | 官方文档 |
+| `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS` | 关闭内置 skills | 官方文档 |
+| `DISABLE_COMPACT` | 关闭上下文压缩 | 官方文档 |
+| `CLAUDE_CODE_DISABLE_1M_CONTEXT` | 关闭 1M 上下文 | 官方文档 |
+| `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` | 不修改终端标题 | 官方文档 |
+| `DISABLE_EXTRA_USAGE_COMMAND` | 关闭 extra usage 命令 | 官方文档 |
+| `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | 实验性 Agent Teams | 官方文档 |
+| `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` | 输出会话状态事件 | 官方文档 |
+| `CLAUDE_CODE_ATTRIBUTION_HEADER` | 省略系统提示里的署名块（写 `0`） | 官方文档 |
+| `CLAUDE_CODE_TOTAL_TOKENS_REMINDER` | 关闭 token 用量提醒（写 `off`） | **第三方实现** |
+
+**加载方式（2 个）**
+
+| 环境变量 | 取值 |
+| --- | --- |
+| `ENABLE_TOOL_SEARCH` | `true` / `auto` / `auto:5` / `false` / 不设置 |
+| `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT` | `1` / `0` / 不设置 |
+
+**超时与限额（4 个）**
+
+| 环境变量 | 界面上的字段 | 单位 |
+| --- | --- | --- |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | 单次最大输出 tokens | tokens |
+| `API_TIMEOUT_MS` | API 超时 | 毫秒 |
+| `BASH_MAX_TIMEOUT_MS` | Bash 命令最大超时 | 毫秒 |
+| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | 触发自动压缩的百分比 | 1–100 |
+
+这四个是**用户所有**：写入但不删除，见[安全设计](#安全设计)。
+
+**其他（3 个）**
+
+| 环境变量 | 界面上的字段 |
+| --- | --- |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 上下文窗口 |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 上下文窗口 |
+| `CLAUDE_CODE_EFFORT_LEVEL` | 思考档位 |
 
 ### Base URL 不要带 `/v1`
 
@@ -226,7 +281,19 @@ Claude Code 会自己拼上 `/v1/messages`。给 `https://api.example.com/v1` �
 
 ### 只改属于接线的那几个键
 
-见上面的变量表。其余一切——`HTTPS_PROXY`、`API_TIMEOUT_MS`、`permissions`、`hooks`、`statusLine`、你自己定义的变量——逐字节保留。这是实测的：一个测试断言「替换一个值后，与原文相比只差一行」。
+见上面的变量表——1.1.0 之后是 33 个。其余一切——`HTTPS_PROXY`、`permissions`、`hooks`、`statusLine`、你自己定义的变量——逐字节保留。这是实测的：一个测试断言「替换一个值后，与原文相比只差一行」。
+
+边界从 16 个键扩到 33 个（**可清除的有 30 个**），这件事本身值得说明，而不是含糊过去：受管边界就是这个软件的安全边界，边界变宽意味着它能碰的东西变多了。变宽的仍然全部是 Claude Code 自己的配置变量，没有一条属于「用户的私有变量」，并且边界测试是逐个列举键名的——扩充边界必须是一次显式编辑，不会被顺带带进来。
+
+### 四个用户所有的键不会被清除
+
+`API_TIMEOUT_MS`、`BASH_MAX_TIMEOUT_MS`、`CLAUDE_CODE_MAX_OUTPUT_TOKENS`、`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`。
+
+这四个的共同点是：用户经常自己手调，而且改的动机跟接哪个后端无关。所以规则是**「要写就写，绝不删除」**。切换后端时，上一个后端留下的其余受管键会被清掉，这四个留着。
+
+写这四个键的代码路径和别的键完全一样，唯一的区别在清除那一步的键集合里。回读校验也跟着放宽了：这四个键里，文件里有一个表单没设的值，**不算**不一致——否则每次启用一份手调过的配置都会弹一条警告。
+
+这条规则是端到端跑的时候逼出来的：激活之后写入是对的，但回读校验立刻报了「触发自动压缩的百分比是 87，期望 未设置」。写入和校验两半对同一条规则的理解不一致，就是这么暴露的。
 
 ### 拒绝，而不是「修复」
 
@@ -299,7 +366,7 @@ Haiku 档没配。它对应 `ANTHROPIC_DEFAULT_HAIKU_MODEL`，专门给后台任
 
 ```bash
 swift build            # 构建
-swift test             # 129 个测试
+swift test             # 179 个测试
 swift run ClaudeBridger
 ```
 
@@ -309,10 +376,18 @@ swift run ClaudeBridger
 
 ```bash
 ./scripts/build-app.sh     # 产出 build/ClaudeBridger.app
-./scripts/build-dmg.sh     # 产出 build/ClaudeBridger-1.0.0.dmg
+./scripts/build-dmg.sh     # 产出 build/ClaudeBridger-1.1.0.dmg
 ```
 
 `build-dmg.sh` 会在打包后把 DMG 挂载回来校验：确认里面的可执行文件在、`/Applications` 符号链接在、版本号与 `VERSION` 一致。
+
+README 里的截图也是构建产物，不是手工截的：
+
+```bash
+./scripts/render-screenshots.sh    # 重新渲染 docs/images/*.png
+```
+
+`swift run ScreenshotRenderer` 把真实的视图挂在**屏幕外的** `NSWindow` 里取位图：`screencapture` 需要「屏幕录制」权限，SwiftUI 的 `ImageRenderer` 又会拒画 `NavigationSplitView` 和 `List`。渲染跑在一个临时 `CLAUDE_CONFIG_DIR` 上，不会碰你真实的 `~/.claude`。它不进 App 包。
 
 ### 测试
 
@@ -328,6 +403,7 @@ swift test
 swift test --filter JSONDocumentTests          # 编辑器只动该动的字节
 swift test --filter ClaudeSettingsWriterTests  # 用户的配置在切换后完好
 swift test --filter ManagedEnvironmentTests    # 安全边界没有被悄悄放宽
+swift test --filter ConfigurationOptionTests   # 开关、1M 后缀、旧配置迁移、自定义请求头
 swift test --filter AppModelTests              # 哪个动作写哪个文件
 ```
 
@@ -335,8 +411,10 @@ swift test --filter AppModelTests              # 哪个动作写哪个文件
 
 - **只接 CLI。** 桌面版 App 走的是另一套机制，见[适用范围](#适用范围)。
 - **走第三方端点时，Claude Code 的一些功能会失效。** 这是 Claude Code 自身的行为：`ANTHROPIC_BASE_URL` 指向非官方主机后，MCP tool search 默认关闭、Remote Control 不可用、定价显示不正常。
+  MCP tool search 这一条**现在可以自己开回来**：打开「加载方式与提示词」卡片，把 MCP 工具加载方式设成 `true`，即写 `ENABLE_TOOL_SEARCH=true`。开与不开的差别是实测的——见[已实测验证的部分](#已实测验证的部分)。其余两条仍然无解。
 - **Anthropic 对第三方网关的态度是「不禁止但不支持」。** 官方文档原话是不背书、不维护、不审计第三方网关，也不支持通过任何网关把 Claude Code 路由到非 Claude 模型。而且历史上逐步收紧过：桌面版加过模型名白名单，CLI 把网关模型发现从默认开启改成手动 opt-in。依赖这条路要有被收紧的心理准备。
 - **内置预设里的模型名会过期。** 端点相对稳定，模型名不是。
+- **有一个开关不保证有效。** `CLAUDE_CODE_TOTAL_TOKENS_REMINDER` 只在第三方客户端里见到，官方文档没有列出，可能随版本失效。界面上它单独分组并标着「第三方实现」，默认关闭。
 - **未公证。** 首次打开需要手动放行，见[安装](#安装)。
 - **`CLAUDE_CONFIG_DIR` 是否也迁移 `~/.claude.json`：未实测**，见[它写哪两个文件](#它写哪两个文件)。
 - **不能反向导入。** 目前只能从预设新建后端，无法读取你已有的 `settings.json` 并识别成一个后端。
@@ -349,6 +427,20 @@ swift test --filter AppModelTests              # 哪个动作写哪个文件
 - 抓包确认请求路径是 `/v1/messages?beta=true`，鉴权头是 `Authorization: Bearer <token>`。
 - 确认 `deepseek-v4-pro[1m]` 的 `[1m]` 后缀由 CLI 在发请求前剥掉，服务商收到 `deepseek-v4-pro`。
 - 写入后 `$schema`、`permissions`、用户自定义的 `env` 变量逐字节保留。
+
+1.1.0 新增的键是逐个抓包验证的，同一个本地 mock 端点、同一版 CLI：
+
+| 写入的键 | 抓到的结果 | 对照 |
+| --- | --- | --- |
+| `ANTHROPIC_CUSTOM_HEADERS` | 请求头里出现 `X-Relay-Tag: claudebridger-e2e` | — |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000` | 请求体 `max_tokens: 64000` | 不设时是 `32000` |
+| `CLAUDE_CODE_ATTRIBUTION_HEADER=0` | 系统提示开头的署名行消失 | 不设时是 `x-anthropic-billing-header: cc_version=2.1.299.4fa; cc_entrypoint=sdk-cli;` |
+| `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT=1` | 系统提示 5723 字符 | 不设时 27341 字符 |
+| `ENABLE_TOOL_SEARCH=true` | 工具 12 个，含 `ToolSearch` 与 `DeferredToolPlaceholder`，MCP 工具不内联 | 不设时 25 个工具，MCP 工具以 `mcp__<server>__<tool>` 内联进请求 |
+
+最后一行值得展开，因为它是一条已知限制的解法：`ENABLE_TOOL_SEARCH` 不设时（也就是接第三方端点时的默认状态），所有 MCP 工具的定义都会**整份塞进每一次请求**；设成 `true` 之后改成按需检索，实测工具数从 25 降到 12。
+
+另外还验证了那个「用户所有的键」的行为：在一份手写着 `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "87"` 的配置上启用后端，切完该值仍是 `87`；再执行一次「恢复官方配置」，它仍然是 `87`，而软件自己写进去的 30 个可清除键全部被移除。
 
 ## 许可证
 

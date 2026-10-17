@@ -209,6 +209,24 @@ public enum ActivationVerification {
                 )
             }
         }
+        for flag in EnvironmentFlag.allCases {
+            let wanted = expected.isOn(flag) ? flag.onValue : nil
+            let actual = snapshot.flagValues[flag.key]
+            if wanted != actual {
+                result.append(
+                    flag.displayName + "是 " + (actual ?? "未设置") + "，期望 " + (wanted ?? "未设置")
+                )
+            }
+        }
+        for choice in EnvironmentChoice.allCases {
+            let wanted = expected.choiceValue(choice)
+            let actual = snapshot.choiceValues[choice.key]
+            if wanted != actual {
+                result.append(
+                    choice.displayName + "是 " + (actual ?? "未设置") + "，期望 " + (wanted ?? "未设置")
+                )
+            }
+        }
         if expected.credentialMode != .none, !credential.isEmpty {
             let key = expected.credentialMode == .authToken
                 ? ManagedEnvironment.authToken

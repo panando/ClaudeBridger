@@ -149,6 +149,10 @@ final class ActivationVerificationTests: XCTestCase {
         baseURL: String? = "https://api.deepseek.com/anthropic",
         models: [String: String] = [:],
         displayNames: [String: String] = [:],
+        flagValues: [String: String] = [:],
+        choiceValues: [String: String] = [:],
+        numericValues: [String: String] = [:],
+        customHeaders: String? = nil,
         keys: Set<String> = []
     ) -> SettingsSnapshot {
         SettingsSnapshot(
@@ -156,6 +160,10 @@ final class ActivationVerificationTests: XCTestCase {
             baseURL: baseURL,
             models: models,
             modelDisplayNames: displayNames,
+            flagValues: flagValues,
+            choiceValues: choiceValues,
+            numericValues: numericValues,
+            customHeaders: customHeaders,
             managedKeysPresent: keys,
             totalEnvironmentKeys: keys.count,
             isUnparseable: unparseable,
@@ -176,6 +184,10 @@ final class ActivationVerificationTests: XCTestCase {
                     ModelTier.primary.rawValue: "deepseek-v4-pro[1m]",
                     ModelTier.haiku.rawValue: "deepseek-v4-flash"
                 ],
+                // The snapshot has to carry every flag the profile turns on, or verification
+                // correctly reports it missing. `makeProfile` stands in for a preset, so it has the
+                // traffic switch on.
+                flagValues: [EnvironmentFlag.disableNonessentialTraffic.key: "1"],
                 keys: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"]
             )
         )
@@ -200,6 +212,7 @@ final class ActivationVerificationTests: XCTestCase {
                     ModelTier.primary.rawValue: "deepseek-v4-pro[1m]",
                     ModelTier.haiku.rawValue: "deepseek-v4-flash"
                 ],
+                flagValues: [EnvironmentFlag.disableNonessentialTraffic.key: "1"],
                 keys: ["ANTHROPIC_BASE_URL"]
             )
         )

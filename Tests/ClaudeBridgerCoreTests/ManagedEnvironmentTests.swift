@@ -8,15 +8,15 @@ final class ManagedEnvironmentTests: XCTestCase {
     /// to the user.
     ///
     /// This is a deliberate, exhaustive list rather than a count, so widening the boundary has to
-    /// be an explicit edit here. The four `_MODEL_NAME` entries were added in 1.0.1 to fix stale
-    /// `/model` picker labels; note there is no `ANTHROPIC_MODEL_NAME` or subagent equivalent,
-    /// because Claude Code defines none.
+    /// be an explicit edit here. 1.0.1 added the four `_MODEL_NAME` keys; 1.1.0 adds the behaviour
+    /// flags, the two choice settings, the numeric limits and the custom-header key.
     func testWritableKeysAreTheWiringOnes() {
         XCTAssertEqual(
             ManagedEnvironment.writableKeys.sorted(),
             [
                 "ANTHROPIC_AUTH_TOKEN",
                 "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_CUSTOM_HEADERS",
                 "ANTHROPIC_DEFAULT_FABLE_MODEL",
                 "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -26,13 +26,66 @@ final class ManagedEnvironmentTests: XCTestCase {
                 "ANTHROPIC_DEFAULT_SONNET_MODEL",
                 "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
                 "ANTHROPIC_MODEL",
+                "API_TIMEOUT_MS",
+                "BASH_MAX_TIMEOUT_MS",
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+                "CLAUDE_CODE_ATTRIBUTION_HEADER",
                 "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+                "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+                "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS",
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+                "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
                 "CLAUDE_CODE_EFFORT_LEVEL",
+                "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS",
+                "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
                 "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-                "CLAUDE_CODE_SUBAGENT_MODEL"
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+                "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT",
+                "CLAUDE_CODE_SUBAGENT_MODEL",
+                "CLAUDE_CODE_TOTAL_TOKENS_REMINDER",
+                "DISABLE_AUTOUPDATER",
+                "DISABLE_COMPACT",
+                "DISABLE_EXTRA_USAGE_COMMAND",
+                "ENABLE_TOOL_SEARCH"
             ]
         )
+    }
+
+    /// The distinction that keeps the wider boundary safe: a key ClaudeBridger will *write* when a
+    /// profile asks for it is not the same as a key it claims ownership of and may delete.
+    ///
+    /// Caught in review with a real file: a machine had `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = 87` set
+    /// by hand. Had those keys joined `clearableKeys`, the next backend switch would have silently
+    /// deleted it — the exact damage this app exists to prevent.
+    func testUserOwnedKeysAreWritableButNeverCleared() {
+        let userOwned: Set<String> = [
+            "API_TIMEOUT_MS",
+            "BASH_MAX_TIMEOUT_MS",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS"
+        ]
+        XCTAssertEqual(ManagedEnvironment.userOwnedKeys, userOwned)
+        for key in userOwned {
+            XCTAssertTrue(ManagedEnvironment.writableKeys.contains(key), key + " should be writable")
+            XCTAssertFalse(
+                ManagedEnvironment.clearableKeys.contains(key),
+                key + " must never be cleared: a user may have set it by hand"
+            )
+        }
+    }
+
+    /// Everything else — the endpoint, credentials, models, flags — *is* owned, because a leftover
+    /// value there is what makes a switch silently keep pointing at the previous backend.
+    func testOwnedKeysAreStillCleared() {
+        for key in ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+                    "ENABLE_TOOL_SEARCH", "ANTHROPIC_CUSTOM_HEADERS"] {
+            XCTAssertTrue(ManagedEnvironment.clearableKeys.contains(key), key + " should be clearable")
+        }
+    }
+
+    func testNoKeyIsBothSecretAndUserOwned() {
+        XCTAssertTrue(ManagedEnvironment.userOwnedKeys.isDisjoint(with: ManagedEnvironment.secretKeys))
     }
 
     func testApiKeyIsClearableButNeverWritten() {
@@ -48,11 +101,21 @@ final class ManagedEnvironmentTests: XCTestCase {
     }
 
     func testCommonUserVariablesAreOutsideTheBoundary() {
-        // Variables a user plausibly sets in the same env block, which the app must never touch.
-        for key in ["HTTPS_PROXY", "HTTP_PROXY", "API_TIMEOUT_MS", "BASH_DEFAULT_TIMEOUT_MS",
+        // Variables a user plausibly sets in the same env block, which the app must never touch in
+        // either direction.
+        //
+        // `API_TIMEOUT_MS` used to be listed here. 1.1.0 surfaces it as a configurable field, so it
+        // moved into the writable set — but it is also in `userOwnedKeys`, which is what keeps the
+        // promise this test was really making: the app never deletes it behind the user's back.
+        for key in ["HTTPS_PROXY", "HTTP_PROXY", "BASH_DEFAULT_TIMEOUT_MS",
                     "DISABLE_TELEMETRY", "CLAUDE_CONFIG_DIR", "MY_OWN_VAR"] {
             XCTAssertFalse(ManagedEnvironment.writableKeys.contains(key), key)
             XCTAssertFalse(ManagedEnvironment.clearableKeys.contains(key), key)
+        }
+        for key in ["API_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+                    "CLAUDE_CODE_MAX_OUTPUT_TOKENS"] {
+            XCTAssertTrue(ManagedEnvironment.writableKeys.contains(key), key)
+            XCTAssertFalse(ManagedEnvironment.clearableKeys.contains(key), key + " must never be cleared")
         }
     }
 

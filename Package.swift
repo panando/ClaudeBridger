@@ -31,6 +31,13 @@ let package = Package(
             dependencies: ["ClaudeBridgerCore", "ClaudeBridgerUI"],
             path: "Sources/ClaudeBridger"
         ),
+        // Renders the README screenshots offscreen: no screen-recording permission, no visible
+        // window. Not part of the app bundle; see scripts/render-screenshots.sh.
+        .executableTarget(
+            name: "ScreenshotRenderer",
+            dependencies: ["ClaudeBridgerCore", "ClaudeBridgerUI"],
+            path: "Sources/ScreenshotRenderer"
+        ),
         .testTarget(
             name: "ClaudeBridgerCoreTests",
             dependencies: ["ClaudeBridgerCore"],

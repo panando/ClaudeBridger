@@ -87,6 +87,12 @@ func makeProfile(
     profile.setModel("deepseek-v4-pro[1m]", for: .primary)
     profile.setModel("deepseek-v4-flash", for: .haiku)
     profile.contextWindow = 1_048_576
+    // Mirrors what a preset produces: the third-party traffic switch is on.
+    //
+    // A bare `BackendProfile` starts with no flags — the app should not switch on a behaviour the
+    // user did not ask for. It is the preset, which stands for "make this backend work", that
+    // turns this one on; this helper stands in for that preset.
+    profile.setFlag(.disableNonessentialTraffic, on: true)
     profile.effortLevel = .max
     return profile
 }

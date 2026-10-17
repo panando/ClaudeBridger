@@ -409,3 +409,249 @@ final class DisplayNameWriteTests: XCTestCase {
         XCTAssertNil(env["ANTHROPIC_MODEL_NAME"], "there is no such variable")
     }
 }
+
+/// The 1.1.0 options, end to end through a real write.
+///
+/// The first test here is the one that matters most: it is a replay of a bug caught in review,
+/// where the widening of the managed-key boundary would have deleted a value a user had set by hand.
+final class ConfigurationOptionWriteTests: XCTestCase {
+
+    private var home: TestHome!
+
+    override func setUp() {
+        super.setUp()
+        home = TestHome()
+    }
+
+    override func tearDown() {
+        home.cleanup()
+        home = nil
+        super.tearDown()
+    }
+
+    private func writer() -> ClaudeSettingsWriter {
+        ClaudeSettingsWriter(paths: home.paths)
+    }
+
+    /// A hand-set numeric must survive a backend switch.
+    ///
+    /// The real file this came from had `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = 87`, set by hand, and no
+    /// profile of ours mentions it. Before `userOwnedKeys` existed, activating any profile deleted
+    /// it — the app silently discarding a deliberate user value, which is exactly what it promises
+    /// never to do.
+    func testHandSetNumericsSurviveABackendSwitch() throws {
+        home.write(settings: """
+        {
+          "env": {
+            "ANTHROPIC_BASE_URL": "https://old.example",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "87",
+            "API_TIMEOUT_MS": "1200000",
+            "BASH_MAX_TIMEOUT_MS": "900000",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32000"
+          }
+        }
+        """)
+
+        var next = BackendProfile(id: "next", name: "Next", baseURL: "https://new.example")
+        next.setModel("m", for: .primary)
+        _ = try writer().activate(profile: next, credential: "sk", writeOnboardingFlag: false)
+
+        let env = home.environment(in: home.read())
+        XCTAssertEqual(env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "87", "a hand-set value must survive")
+        XCTAssertEqual(env["API_TIMEOUT_MS"], "1200000")
+        XCTAssertEqual(env["BASH_MAX_TIMEOUT_MS"], "900000")
+        XCTAssertEqual(env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"], "32000")
+        // And the endpoint really did move, so this is not a do-nothing test.
+        XCTAssertEqual(env["ANTHROPIC_BASE_URL"], "https://new.example")
+    }
+
+    /// The same keys *are* written when a profile asks for them.
+    func testAProfileCanOverrideAHandSetNumeric() throws {
+        home.write(settings: """
+        { "env": { "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "87" } }
+        """)
+        var profile = makeProfile()
+        profile.setNumeric(.autoCompactPercent, value: "50")
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+        XCTAssertEqual(home.environment(in: home.read())["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "50")
+    }
+
+    func testRestoreOfficialConfigurationKeepsHandSetNumerics() throws {
+        home.write(settings: """
+        { "env": { "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "87", "MY_VAR": "keep" } }
+        """)
+        // Restore is driven from AppModel, but the key list it walks is the boundary itself.
+        for key in ManagedEnvironment.clearableKeys {
+            XCTAssertNotEqual(
+                key, "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+                "restore must not remove a value the user set by hand"
+            )
+        }
+    }
+
+    func testFlagsReachTheFileWithTheRightValues() throws {
+        var profile = makeProfile()
+        profile.setFlag(.omitAttributionHeader, on: true)
+        profile.setFlag(.disableCompact, on: true)
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+
+        let env = home.environment(in: home.read())
+        XCTAssertEqual(env["CLAUDE_CODE_ATTRIBUTION_HEADER"], "0", "the inverted flag writes 0")
+        XCTAssertEqual(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1")
+        XCTAssertEqual(writer().verify(expected: profile, credential: "sk"), [])
+    }
+
+    func testSwitchingClearsThePreviousBackendsFlags() throws {
+        home.write(settings: """
+        {
+          "env": {
+            "ANTHROPIC_BASE_URL": "https://old.example",
+            "DISABLE_COMPACT": "1",
+            "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "87"
+          }
+        }
+        """)
+        var next = BackendProfile(id: "next", name: "Next", baseURL: "https://new.example")
+        next.setModel("m", for: .primary)
+        _ = try writer().activate(profile: next, credential: "sk", writeOnboardingFlag: false)
+
+        let env = home.environment(in: home.read())
+        XCTAssertNil(env["DISABLE_COMPACT"], "an owned flag from the previous backend is cleared")
+        XCTAssertNil(env["CLAUDE_CODE_ATTRIBUTION_HEADER"])
+        XCTAssertEqual(env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "87", "the user-owned one is not")
+    }
+
+    func testChoicesAndHeadersReachTheFile() throws {
+        var profile = makeProfile()
+        profile.setChoice(.toolSearch, value: "true")
+        profile.customHeaders = "X-Relay: abc\nX-Team: infra"
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+
+        let env = home.environment(in: home.read())
+        XCTAssertEqual(env["ENABLE_TOOL_SEARCH"], "true")
+        XCTAssertEqual(env["ANTHROPIC_CUSTOM_HEADERS"], "X-Relay: abc\nX-Team: infra")
+        XCTAssertEqual(writer().verify(expected: profile, credential: "sk"), [])
+    }
+
+    func testVerificationCatchesAWronglyValuedFlag() throws {
+        var profile = makeProfile()
+        profile.setFlag(.omitAttributionHeader, on: true)
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+
+        // Someone flips the inverted flag to the value that means the opposite.
+        home.write(settings: home.read().replacingOccurrences(
+            of: "\"CLAUDE_CODE_ATTRIBUTION_HEADER\": \"0\"",
+            with: "\"CLAUDE_CODE_ATTRIBUTION_HEADER\": \"1\""
+        ))
+        let problems = writer().verify(expected: profile, credential: "sk")
+        XCTAssertTrue(
+            problems.contains { $0.contains("署名块") },
+            "verification must catch a flag set to the wrong value, not just a missing one: \(problems)"
+        )
+    }
+
+    func testVerificationCatchesAMissingNumeric() throws {
+        var profile = makeProfile()
+        profile.setNumeric(.apiTimeoutMs, value: "1200000")
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+        home.write(settings: home.read().replacingOccurrences(
+            of: "\"API_TIMEOUT_MS\": \"1200000\",\n", with: ""
+        ).replacingOccurrences(of: "\"API_TIMEOUT_MS\": \"1200000\"", with: "\"X\": \"1\""))
+        let problems = writer().verify(expected: profile, credential: "sk")
+        XCTAssertTrue(problems.contains { $0.contains("API 超时") }, "got: \(problems)")
+    }
+
+    func testSnapshotReportsTheNewGroups() throws {
+        home.write(settings: """
+        {
+          "env": {
+            "DISABLE_COMPACT": "1",
+            "ENABLE_TOOL_SEARCH": "auto",
+            "API_TIMEOUT_MS": "999",
+            "ANTHROPIC_CUSTOM_HEADERS": "X-A: 1"
+          }
+        }
+        """)
+        let snapshot = writer().snapshot()
+        XCTAssertEqual(snapshot.flagValues["DISABLE_COMPACT"], "1")
+        XCTAssertEqual(snapshot.choiceValues["ENABLE_TOOL_SEARCH"], "auto")
+        XCTAssertEqual(snapshot.numericValues["API_TIMEOUT_MS"], "999")
+        XCTAssertEqual(snapshot.customHeaders, "X-A: 1")
+    }
+
+    func testEverythingRoundTripsThroughAWriteAndSnapshot() throws {
+        var profile = makeProfile()
+        profile.setFlag(.omitAttributionHeader, on: true)
+        profile.setFlag(.agentTeams, on: true)
+        profile.setChoice(.systemPrompt, value: "0")
+        profile.setNumeric(.bashMaxTimeoutMs, value: "600000")
+        profile.customHeaders = "X-One: 1"
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+
+        let snapshot = writer().snapshot()
+        XCTAssertEqual(snapshot.flagValues["CLAUDE_CODE_ATTRIBUTION_HEADER"], "0")
+        XCTAssertEqual(snapshot.flagValues["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1")
+        XCTAssertEqual(snapshot.choiceValues["CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT"], "0")
+        XCTAssertEqual(snapshot.numericValues["BASH_MAX_TIMEOUT_MS"], "600000")
+        XCTAssertEqual(snapshot.customHeaders, "X-One: 1")
+        XCTAssertEqual(writer().verify(expected: profile, credential: "sk"), [])
+    }
+}
+
+/// Verification has to stay quiet about values it deliberately does not manage.
+///
+/// Found by the end-to-end run: the write side preserved a hand-set value correctly, but
+/// verification then reported it as a mismatch, so activating a hand-tuned file would raise a
+/// warning every single time. Both halves of the user-owned rule have to agree.
+final class UserOwnedVerificationTests: XCTestCase {
+
+    private var home: TestHome!
+
+    override func setUp() {
+        super.setUp()
+        home = TestHome()
+    }
+
+    override func tearDown() {
+        home.cleanup()
+        home = nil
+        super.tearDown()
+    }
+
+    private func writer() -> ClaudeSettingsWriter { ClaudeSettingsWriter(paths: home.paths) }
+
+    func testPreexistingUserOwnedNumericDoesNotFailVerification() throws {
+        home.write(settings: """
+        {
+          "env": {
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "87",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000"
+          }
+        }
+        """)
+        var profile = makeProfile()
+        profile.setFlag(.disableNonessentialTraffic, on: true)
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+        XCTAssertEqual(writer().verify(expected: profile, credential: "sk"), [])
+        XCTAssertEqual(
+            home.environment(in: home.read())["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "87",
+            "and the value is still there"
+        )
+    }
+
+    func testAValueTheProfileDoesSetIsStillVerified() throws {
+        home.write(settings: """
+        { "env": { "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "87" } }
+        """)
+        var profile = makeProfile()
+        profile.setNumeric(.autoCompactPercent, value: "50")
+        _ = try writer().activate(profile: profile, credential: "sk", writeOnboardingFlag: false)
+        XCTAssertEqual(writer().verify(expected: profile, credential: "sk"), [])
+
+        // And a drift is still caught.
+        home.write(settings: home.read().replacingOccurrences(of: "\"50\"", with: "\"60\""))
+        let problems = writer().verify(expected: profile, credential: "sk")
+        XCTAssertTrue(problems.contains { $0.contains("自动压缩") }, "got: \(problems)")
+    }
+}

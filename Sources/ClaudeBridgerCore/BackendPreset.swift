@@ -76,6 +76,12 @@ public struct BackendPreset: Identifiable, Equatable, Sendable {
             credentialMode: credentialMode,
             contextWindow: contextWindow
         )
+        // Presets switch on the one flag that matters for a third-party endpoint: without it
+        // Claude Code keeps making calls that only make sense against Anthropic's own API. A
+        // user-created profile starts with nothing on, so the app never enables something the
+        // user did not ask for; a preset can, because choosing "DeepSeek" is asking for a working
+        // third-party setup.
+        profile.setFlag(.disableNonessentialTraffic, on: true)
         // Every tier defaults to the preset's preferred model: leaving a tier unset is what makes
         // the background tiers silently fail, so a preset fills all of them rather than making the
         // user discover the requirement from an error message.

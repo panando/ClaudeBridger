@@ -76,6 +76,52 @@ public enum ModelTier: String, Codable, CaseIterable, Sendable {
 
     /// Whether this tier can carry a display name at all.
     public var supportsDisplayName: Bool { displayNameKey != nil }
+
+    // MARK: - The 1M context suffix
+
+    /// The context-window hint written after a model id, e.g. `deepseek-v4-pro[1m]`.
+    ///
+    /// Verified by experiment against Claude Code v2.1.299: the CLI strips this suffix before
+    /// sending the request, so the vendor receives the bare model id. It is a client-side hint
+    /// telling Claude Code the model can take a large context, not part of the model's name.
+    public static let oneMillionSuffix = "[1m]"
+
+    /// Every spelling of the suffix that has been observed in the wild.
+    ///
+    /// ClaudeBridger writes the lowercase form, but Cherry Studio writes `[1M]` (with a space, as
+    /// ` [1M]`) and several vendor guides use `[1M]`. Reading all of them means a profile written
+    /// by another tool is recognised as 1M rather than silently treated as an ordinary model name.
+    static let recognisedSuffixes = ["[1m]", "[1M]", " [1m]", " [1M]"]
+
+    /// The model id with any recognised 1M suffix removed.
+    public static func stripping1M(from model: String) -> String {
+        var result = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Loop so a doubled suffix (`m[1m][1M]`) cannot survive a single pass.
+        var changed = true
+        while changed {
+            changed = false
+            for suffix in recognisedSuffixes where result.hasSuffix(suffix) {
+                result = String(result.dropLast(suffix.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                changed = true
+                break
+            }
+        }
+        return result
+    }
+
+    /// Whether `model` carries a 1M suffix in any recognised spelling.
+    public static func has1M(_ model: String) -> Bool {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return recognisedSuffixes.contains { trimmed.hasSuffix($0) }
+    }
+
+    /// Appends the suffix in the canonical form.
+    public static func appending1M(to model: String) -> String {
+        let bare = stripping1M(from: model)
+        guard !bare.isEmpty else { return bare }
+        return bare + oneMillionSuffix
+    }
 }
 
 /// Every environment key ClaudeBridger is allowed to write or remove.
@@ -87,8 +133,12 @@ public enum ModelTier: String, Codable, CaseIterable, Sendable {
 /// writes only keys on this list, clears only keys on this list, and leaves every other member of
 /// the object byte-for-byte alone.
 ///
-/// The list covers the endpoint, the credential, the model tiers, the context-window knobs and
-/// the two traffic switches that a third-party endpoint needs.
+/// The list covers the endpoint, the credential, the model tiers and their labels, the
+/// context-window knobs, the behaviour flags, the numeric limits and the custom-header setting.
+///
+/// Every key here is a Claude Code configuration variable. None of them is a variable a user would
+/// plausibly have set for their own purposes, which is the test a new key has to pass to join this
+/// set: widening this boundary is how the app could start damaging the file it promises to protect.
 public enum ManagedEnvironment {
     /// `ANTHROPIC_BASE_URL` — where requests go.
     public static let baseURL = "ANTHROPIC_BASE_URL"
@@ -104,9 +154,6 @@ public enum ManagedEnvironment {
     public static let autoCompactWindow = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
     /// `CLAUDE_CODE_MAX_CONTEXT_TOKENS` — the context budget.
     public static let maxContextTokens = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
-    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` — stops calls that only make sense against
-    /// Anthropic's own API.
-    public static let disableNonessentialTraffic = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
     /// `CLAUDE_CODE_EFFORT_LEVEL` — the default thinking effort.
     public static let effortLevel = "CLAUDE_CODE_EFFORT_LEVEL"
 
@@ -122,6 +169,31 @@ public enum ManagedEnvironment {
         ModelTier.allCases.compactMap(\.displayNameKey)
     }
 
+    /// The keys of every behaviour flag, derived from the flag list.
+    public static var flagKeys: [String] { EnvironmentFlag.allCases.map(\.key) }
+
+    /// The keys of the choice settings, derived from the choice list.
+    public static var choiceKeys: [String] { EnvironmentChoice.allCases.map(\.key) }
+
+    /// The keys of the numeric limits, derived from the numeric list.
+    public static var numericKeys: [String] { NumericSetting.allCases.map(\.key) }
+
+    /// Keys ClaudeBridger writes but does **not** claim ownership of.
+    ///
+    /// This is the important distinction for these options, and it exists because of a real
+    /// incident caught in review: `API_TIMEOUT_MS`, `BASH_MAX_TIMEOUT_MS`,
+    /// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` are general tuning
+    /// knobs. A user may well have set them by hand long before this app existed — one machine had
+    /// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = 87` sitting in its settings.json.
+    ///
+    /// If those keys joined `clearableKeys`, switching backends would delete a value the user
+    /// wrote, which is precisely the damage this app exists to prevent. So they are writable (an
+    /// explicit value in the profile wins, and can be corrected) but never *cleared*: an empty
+    /// field means "leave whatever is there alone", not "remove it".
+    public static var userOwnedKeys: Set<String> {
+        Set(numericKeys)
+    }
+
     /// Everything ClaudeBridger may write.
     public static var writableKeys: Set<String> {
         Set([
@@ -129,20 +201,32 @@ public enum ManagedEnvironment {
             authToken,
             autoCompactWindow,
             maxContextTokens,
-            disableNonessentialTraffic,
-            effortLevel
-        ]).union(modelTierKeys).union(modelDisplayNameKeys)
+            effortLevel,
+            CustomHeaders.key
+        ])
+        .union(modelTierKeys)
+        .union(modelDisplayNameKeys)
+        .union(flagKeys)
+        .union(choiceKeys)
+        .union(numericKeys)
     }
 
-    /// Everything ClaudeBridger may remove. The credential key is here but not in `writableKeys`:
-    /// it is cleared, never set.
+    /// Everything ClaudeBridger may remove.
+    ///
+    /// The credential key is here but not in `writableKeys`: it is cleared, never set. The
+    /// user-owned keys are deliberately excluded — see `userOwnedKeys`.
     public static var clearableKeys: Set<String> {
-        writableKeys.union([apiKey])
+        writableKeys.subtracting(userOwnedKeys).union([apiKey])
     }
 
     /// Keys whose values are secret and must never be written into ClaudeBridger's own state file
     /// (which is not where the user expects a credential to be, and which nothing rotates).
     public static var secretKeys: Set<String> { [authToken, apiKey] }
+
+    /// Whether a key is managed at all, in either direction.
+    public static func isManaged(_ key: String) -> Bool {
+        writableKeys.contains(key) || clearableKeys.contains(key)
+    }
 }
 
 /// The effort levels `CLAUDE_CODE_EFFORT_LEVEL` accepts.
@@ -216,8 +300,16 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
     /// Pins the context window. nil means do not write either variable, which lets the model's
     /// own documented default apply.
     public var contextWindow: Int?
-    /// Whether to set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`.
-    public var disableNonessentialTraffic: Bool
+    /// The behaviour flags that are on. A flag that is off is absent from the file rather than
+    /// written with an "off" value, so switching backends really does clear the previous one's.
+    public var flags: Set<EnvironmentFlag>
+    /// Choice settings, keyed by `EnvironmentChoice.rawValue`. Absent means "leave unset", which
+    /// for `ENABLE_TOOL_SEARCH` is materially different from any explicit value.
+    public var choices: [String: String]
+    /// Numeric limits, keyed by `NumericSetting.rawValue`. Absent means unset.
+    public var numerics: [String: String]
+    /// Raw `ANTHROPIC_CUSTOM_HEADERS` text, newline-separated `Name: Value`. Empty means unset.
+    public var customHeaders: String
     public var effortLevel: EffortLevel?
 
     public init(
@@ -230,7 +322,10 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
         models: [String: String] = [:],
         modelDisplayNames: [String: String] = [:],
         contextWindow: Int? = nil,
-        disableNonessentialTraffic: Bool = true,
+        flags: Set<EnvironmentFlag> = [],
+        choices: [String: String] = [:],
+        numerics: [String: String] = [:],
+        customHeaders: String = "",
         effortLevel: EffortLevel? = nil
     ) {
         self.id = id
@@ -242,7 +337,10 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
         self.models = models
         self.modelDisplayNames = modelDisplayNames
         self.contextWindow = contextWindow
-        self.disableNonessentialTraffic = disableNonessentialTraffic
+        self.flags = flags
+        self.choices = choices
+        self.numerics = numerics
+        self.customHeaders = customHeaders
         self.effortLevel = effortLevel
     }
 
@@ -279,6 +377,83 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
         }
     }
 
+    // MARK: - The 1M checkbox
+    //
+    // The checkbox is a view of the model string, not a stored field. Keeping `models` as the only
+    // source of truth is what makes this migration-free: a profile that already says
+    // `deepseek-v4-pro[1m]` simply shows as checked, and there is no second value that could
+    // disagree with the one being written.
+
+    /// Whether this tier's model carries a 1M suffix.
+    public func is1M(for tier: ModelTier) -> Bool {
+        guard let value = model(for: tier) else { return false }
+        return ModelTier.has1M(value)
+    }
+
+    /// Turns the suffix on or off for this tier. No-op when the tier has no model.
+    public mutating func set1M(_ enabled: Bool, for tier: ModelTier) {
+        guard let current = model(for: tier) else { return }
+        let updated = enabled
+            ? ModelTier.appending1M(to: current)
+            : ModelTier.stripping1M(from: current)
+        setModel(updated, for: tier)
+        // A label describes the model, never the hint: keep it free of the suffix.
+        if let label = displayName(for: tier) {
+            setDisplayName(ModelTier.stripping1M(from: label), for: tier)
+        }
+    }
+
+    // MARK: - Flags, choices, numerics
+
+    public func isOn(_ flag: EnvironmentFlag) -> Bool { flags.contains(flag) }
+
+    public mutating func setFlag(_ flag: EnvironmentFlag, on: Bool) {
+        if on { flags.insert(flag) } else { flags.remove(flag) }
+    }
+
+    public func choiceValue(_ choice: EnvironmentChoice) -> String? {
+        guard let raw = choices[choice.rawValue] else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    public mutating func setChoice(_ choice: EnvironmentChoice, value: String?) {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            choices[choice.rawValue] = trimmed
+        } else {
+            choices.removeValue(forKey: choice.rawValue)
+        }
+    }
+
+    public func numericValue(_ setting: NumericSetting) -> String? {
+        guard let raw = numerics[setting.rawValue] else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    public mutating func setNumeric(_ setting: NumericSetting, value: String?) {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            numerics[setting.rawValue] = trimmed
+        } else {
+            numerics.removeValue(forKey: setting.rawValue)
+        }
+    }
+
+    /// The custom headers as the newline-separated text the variable expects.
+    public var normalizedCustomHeaders: String? {
+        let parsed = CustomHeaders.parse(customHeaders)
+        guard !parsed.pairs.isEmpty else { return nil }
+        return CustomHeaders.render(parsed.pairs)
+    }
+
+    /// Problems in the custom-header text, for the form to surface. A malformed header line would
+    /// otherwise reach the service and fail there, where it is far harder to diagnose.
+    public var customHeaderProblems: [String] {
+        CustomHeaders.parse(customHeaders).problems
+    }
+
     /// Every environment variable this profile would write, in a stable order.
     ///
     /// The order matters only for readability of the written file, but it is fixed so a switch
@@ -311,11 +486,26 @@ public struct BackendProfile: Codable, Identifiable, Equatable, Sendable {
             pairs.append((ManagedEnvironment.autoCompactWindow, String(window)))
             pairs.append((ManagedEnvironment.maxContextTokens, String(window)))
         }
-        if disableNonessentialTraffic {
-            pairs.append((ManagedEnvironment.disableNonessentialTraffic, "1"))
-        }
         if let effort = effortLevel {
             pairs.append((ManagedEnvironment.effortLevel, effort.rawValue))
+        }
+        // Flags, choices and numerics are emitted in enum declaration order so the written block
+        // has a stable shape regardless of the order the user toggled things.
+        for flag in EnvironmentFlag.allCases where flags.contains(flag) {
+            pairs.append((flag.key, flag.onValue))
+        }
+        for choice in EnvironmentChoice.allCases {
+            if let value = choiceValue(choice) {
+                pairs.append((choice.key, value))
+            }
+        }
+        for setting in NumericSetting.allCases {
+            if let value = numericValue(setting) {
+                pairs.append((setting.key, value))
+            }
+        }
+        if let headers = normalizedCustomHeaders {
+            pairs.append((CustomHeaders.key, headers))
         }
         return pairs
     }
@@ -356,8 +546,22 @@ public struct StoredProfile: Codable, Equatable, Sendable {
     public var models: [String: String]
     public var modelDisplayNames: [String: String]
     public var contextWindow: Int?
-    public var disableNonessentialTraffic: Bool
+    public var flags: Set<EnvironmentFlag>
+    public var choices: [String: String]
+    public var numerics: [String: String]
+    public var customHeaders: String
     public var effortLevel: EffortLevel?
+
+    /// Declared explicitly because `disableNonessentialTraffic` is read during decoding but is no
+    /// longer a stored property: the synthesised key list only covers stored properties, so the
+    /// legacy key would otherwise be unreachable and every 1.0.x profile would lose that setting.
+    enum CodingKeys: String, CodingKey {
+        case id, name, category, baseURL, credentialMode
+        case models, modelDisplayNames, contextWindow
+        case flags, choices, numerics, customHeaders, effortLevel
+        /// Legacy (1.0.x). Read-only: never written back.
+        case disableNonessentialTraffic
+    }
 
     public init(_ profile: BackendProfile) {
         id = profile.id
@@ -368,14 +572,19 @@ public struct StoredProfile: Codable, Equatable, Sendable {
         models = profile.models
         modelDisplayNames = profile.modelDisplayNames
         contextWindow = profile.contextWindow
-        disableNonessentialTraffic = profile.disableNonessentialTraffic
+        flags = profile.flags
+        choices = profile.choices
+        numerics = profile.numerics
+        customHeaders = profile.customHeaders
         effortLevel = profile.effortLevel
     }
 
-    /// Hand-written so a config saved before display names existed still decodes.
+    /// Hand-written so a config saved by an older build still decodes.
     ///
     /// The synthesised decoder throws on a missing key, which would turn "new field" into "your
-    /// saved backends are gone" for anyone upgrading.
+    /// saved backends are gone" for anyone upgrading. That matters more here than usual: 1.1.0
+    /// replaced a stored boolean with a set of flags, so this is the one place where an existing
+    /// user's data is read by a shape it was not written in.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -386,8 +595,43 @@ public struct StoredProfile: Codable, Equatable, Sendable {
         models = try container.decodeIfPresent([String: String].self, forKey: .models) ?? [:]
         modelDisplayNames = try container.decodeIfPresent([String: String].self, forKey: .modelDisplayNames) ?? [:]
         contextWindow = try container.decodeIfPresent(Int.self, forKey: .contextWindow)
-        disableNonessentialTraffic = try container.decodeIfPresent(Bool.self, forKey: .disableNonessentialTraffic) ?? true
+        choices = try container.decodeIfPresent([String: String].self, forKey: .choices) ?? [:]
+        numerics = try container.decodeIfPresent([String: String].self, forKey: .numerics) ?? [:]
+        customHeaders = try container.decodeIfPresent(String.self, forKey: .customHeaders) ?? ""
         effortLevel = try container.decodeIfPresent(EffortLevel.self, forKey: .effortLevel)
+
+        if let decoded = try container.decodeIfPresent(Set<EnvironmentFlag>.self, forKey: .flags) {
+            flags = decoded
+        } else {
+            // Migration from the 1.0.x shape, which stored a single boolean instead of the set.
+            //
+            // The old field defaulted to `true`, so a profile saved by 1.0.1 that omitted it still
+            // had the flag on. Decoding `?? true` for the legacy key therefore reproduces the old
+            // behaviour exactly rather than silently dropping a setting the user had.
+            let legacy = try container.decodeIfPresent(Bool.self, forKey: .disableNonessentialTraffic) ?? true
+            flags = legacy ? [.disableNonessentialTraffic] : []
+        }
+    }
+
+    /// Written by hand because `CodingKeys` carries a read-only case (the legacy boolean), which
+    /// stops the synthesised encoder from being generated. The legacy key is deliberately not
+    /// written: 1.1.0 stores the same information in `flags`, and emitting both would leave two
+    /// sources of truth that could disagree.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(category, forKey: .category)
+        try container.encode(baseURL, forKey: .baseURL)
+        try container.encode(credentialMode, forKey: .credentialMode)
+        try container.encode(models, forKey: .models)
+        try container.encode(modelDisplayNames, forKey: .modelDisplayNames)
+        try container.encodeIfPresent(contextWindow, forKey: .contextWindow)
+        try container.encode(flags, forKey: .flags)
+        try container.encode(choices, forKey: .choices)
+        try container.encode(numerics, forKey: .numerics)
+        try container.encode(customHeaders, forKey: .customHeaders)
+        try container.encodeIfPresent(effortLevel, forKey: .effortLevel)
     }
 
     public func profile(credential: String) -> BackendProfile {
@@ -401,7 +645,10 @@ public struct StoredProfile: Codable, Equatable, Sendable {
             models: models,
             modelDisplayNames: modelDisplayNames,
             contextWindow: contextWindow,
-            disableNonessentialTraffic: disableNonessentialTraffic,
+            flags: flags,
+            choices: choices,
+            numerics: numerics,
+            customHeaders: customHeaders,
             effortLevel: effortLevel
         )
     }

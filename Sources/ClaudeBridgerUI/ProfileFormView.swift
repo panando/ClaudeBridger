@@ -74,10 +74,19 @@ struct ProfileFormView: View {
                     ForEach(ModelTier.allCases, id: \.self) { tier in
                         VStack(alignment: .leading, spacing: Tokens.spacingXS) {
                             FormRow(label: tier.displayName, help: tier.explanation) {
-                                TextField(tierPlaceholder(tier), text: binding(for: tier))
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(.body, design: .monospaced))
-                                    .frame(width: 320)
+                                HStack(spacing: Tokens.spacingS) {
+                                    TextField(tierPlaceholder(tier), text: binding(for: tier))
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 320)
+                                    // The checkbox edits the model string rather than a separate
+                                    // field, so a model that already carries the suffix shows as
+                                    // checked and there is no second value to disagree with.
+                                    Toggle("1M", isOn: isOneMBinding(for: tier))
+                                        .toggleStyle(.checkbox)
+                                        .disabled(draft.model(for: tier) == nil)
+                                        .help("在模型名后加上 " + ModelTier.oneMillionSuffix + " 后缀。这是给 Claude Code 的上下文窗口提示——实测 CLI 会在发请求前把它剥掉，服务商收到的是干净的模型名。")
+                                }
                             }
                             // Only the four alias tiers have a display-name variable; the main
                             // conversation and subagent tiers have none, so no field is shown for
@@ -96,11 +105,25 @@ struct ProfileFormView: View {
                             }
                         }
                     }
-                    Button("一键填满其余档位") {
-                        fillEmptyTiers()
+                    HStack(spacing: Tokens.spacingS) {
+                        Button("一键填满其余档位") {
+                            fillEmptyTiers()
+                        }
+                        .disabled(draft.model(for: .primary) == nil)
+                        .help("把主对话的模型名复制到还没有填写的档位上。")
+
+                        Button("全部勾选 1M") {
+                            for tier in ModelTier.allCases { draft.set1M(true, for: tier) }
+                        }
+                        .disabled(draft.models.isEmpty)
+                        .help("给所有已填写的档位加上 " + ModelTier.oneMillionSuffix + " 后缀。")
+
+                        Button("全部取消 1M") {
+                            for tier in ModelTier.allCases { draft.set1M(false, for: tier) }
+                        }
+                        .disabled(!ModelTier.allCases.contains { draft.is1M(for: $0) })
+                        .help("去掉所有档位的 " + ModelTier.oneMillionSuffix + " 后缀。")
                     }
-                    .disabled(draft.model(for: .primary) == nil)
-                    .help("把主对话的模型名复制到还没有填写的档位上。")
                 }
             }
 
@@ -121,7 +144,7 @@ struct ProfileFormView: View {
                     }
                     FormRow(
                         label: "思考档位",
-                        help: "写成 CLAUDE_CODE_EFFORT_LEVEL。复杂任务建议高一些。"
+                        help: "写成 CLAUDE_CODE_EFFORT_LEVEL。复杂任务建议高一些。注意 Claude Code 官方文档说明：这个环境变量的优先级高于 settings.json 顶层的 effortLevel 与 /effort 命令。"
                     ) {
                         Picker("", selection: $draft.effortLevel) {
                             Text("不设置").tag(EffortLevel?.none)
@@ -132,16 +155,185 @@ struct ProfileFormView: View {
                         .labelsHidden()
                         .frame(width: 140)
                     }
-                    FormRow(
-                        label: "关闭非必要流量",
-                        help: "写成 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC。接第三方后端时建议保持开启。"
-                    ) {
-                        Toggle("", isOn: $draft.disableNonessentialTraffic)
-                            .labelsHidden()
+                }
+            }
+
+            DisclosureSection(
+                title: "行为开关",
+                subtitle: "这些开关写成 Claude Code 的环境变量。关闭状态不会写入任何值——所以切换后端时上一个后端开启的开关会被清掉。",
+                badge: flagsBadge
+            ) {
+                VStack(alignment: .leading, spacing: Tokens.spacingM) {
+                    // The documented flags first, then the third-party-only ones, so an option
+                    // whose provenance is weaker is never presented as if it were settled.
+                    ForEach(documentedFlags, id: \.self) { flag in
+                        FlagToggleRow(flag: flag, isOn: flagBinding(flag))
+                    }
+                    if !thirdPartyFlags.isEmpty {
+                        Divider()
+                        Text("以下键在主流第三方客户端里在用，但官方文档没有列出，可能随版本失效。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ForEach(thirdPartyFlags, id: \.self) { flag in
+                            FlagToggleRow(flag: flag, isOn: flagBinding(flag))
+                        }
+                    }
+                    Divider()
+                    Text("这些开关里只有「关闭非必要流量」对第三方后端是普遍建议的。其余大多数场景下应该保持关闭：它们要么只影响本地终端行为，字面含义并不改变模型选择。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            DisclosureSection(
+                title: "加载方式与提示词",
+                subtitle: "这两项取值不是简单的开关，所以用下拉框。",
+                badge: choicesBadge
+            ) {
+                VStack(alignment: .leading, spacing: Tokens.spacingM) {
+                    ForEach(EnvironmentChoice.allCases, id: \.self) { choice in
+                        VStack(alignment: .leading, spacing: Tokens.spacingXS) {
+                            FormRow(label: choice.displayName, help: choice.explanation) {
+                                Picker("", selection: choiceBinding(choice)) {
+                                    ForEach(choice.options) { option in
+                                        Text(option.label).tag(option.id)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 340)
+                            }
+                            if let detail = selectedOptionDetail(choice) {
+                                Text(detail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.leading, Tokens.labelWidth + Tokens.spacingM)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Text(choice.key)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .padding(.leading, Tokens.labelWidth + Tokens.spacingM)
+                        }
+                    }
+                }
+            }
+
+            DisclosureSection(
+                title: "超时与限额",
+                subtitle: "留空就用 Claude Code 的默认值。填错可能导致请求被提前超时或报错，不确定就别填。",
+                badge: numericsBadge
+            ) {
+                VStack(alignment: .leading, spacing: Tokens.spacingM) {
+                    ForEach(NumericSetting.allCases, id: \.self) { setting in
+                        VStack(alignment: .leading, spacing: Tokens.spacingXS) {
+                            FormRow(label: setting.displayName, help: setting.explanation) {
+                                HStack(spacing: Tokens.spacingS) {
+                                    TextField(setting.placeholder, text: numericBinding(setting))
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 140)
+                                    Text(setting.unit)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            if let error = numericError(setting) {
+                                Label(error, systemImage: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                    .padding(.leading, Tokens.labelWidth + Tokens.spacingM)
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: Tokens.spacingXS) {
+                        FormRow(
+                            label: "自定义请求头",
+                            help: "写成 ANTHROPIC_CUSTOM_HEADERS，每行一个 Name: Value。中转服务常需要它。"
+                        ) {
+                            TextEditor(text: $draft.customHeaders)
+                                .font(.system(.caption, design: .monospaced))
+                                .frame(width: 340, height: 66)
+                                .padding(2)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: Tokens.radiusS)
+                                        .strokeBorder(Color(nsColor: .separatorColor))
+                                )
+                        }
+                        if !draft.customHeaderProblems.isEmpty {
+                            ForEach(Array(draft.customHeaderProblems.enumerated()), id: \.offset) { _, problem in
+                                Label(problem, systemImage: "exclamationmark.triangle")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    // MARK: - Flag / choice / numeric helpers
+
+    private var documentedFlags: [EnvironmentFlag] {
+        EnvironmentFlag.allCases.filter { $0.provenance.isOfficial }
+    }
+
+    private var thirdPartyFlags: [EnvironmentFlag] {
+        EnvironmentFlag.allCases.filter { !$0.provenance.isOfficial }
+    }
+
+    private var flagsBadge: String {
+        draft.flags.isEmpty ? "" : "已开 " + String(draft.flags.count)
+    }
+
+    private var choicesBadge: String {
+        draft.choices.isEmpty ? "" : "已设 " + String(draft.choices.count)
+    }
+
+    private var numericsBadge: String {
+        var count = draft.numerics.count
+        if draft.normalizedCustomHeaders != nil { count += 1 }
+        return count == 0 ? "" : "已设 " + String(count)
+    }
+
+    private func flagBinding(_ flag: EnvironmentFlag) -> Binding<Bool> {
+        Binding(
+            get: { draft.isOn(flag) },
+            set: { draft.setFlag(flag, on: $0) }
+        )
+    }
+
+    private func choiceBinding(_ choice: EnvironmentChoice) -> Binding<String> {
+        Binding(
+            get: { choice.optionID(forValue: draft.choiceValue(choice)) },
+            set: { newID in
+                let value = choice.options.first { $0.id == newID }?.value
+                draft.setChoice(choice, value: value)
+            }
+        )
+    }
+
+    private func selectedOptionDetail(_ choice: EnvironmentChoice) -> String? {
+        let current = choice.optionID(forValue: draft.choiceValue(choice))
+        return choice.options.first { $0.id == current }?.detail
+    }
+
+    private func numericBinding(_ setting: NumericSetting) -> Binding<String> {
+        Binding(
+            get: { draft.numericValue(setting) ?? "" },
+            set: { draft.setNumeric(setting, value: $0) }
+        )
+    }
+
+    private func numericError(_ setting: NumericSetting) -> String? {
+        let raw = draft.numericValue(setting) ?? ""
+        return setting.validate(raw).errorMessage
     }
 
     // MARK: - Bindings
@@ -154,6 +346,13 @@ struct ProfileFormView: View {
         Binding(
             get: { draft.model(for: tier) ?? "" },
             set: { draft.setModel($0, for: tier) }
+        )
+    }
+
+    private func isOneMBinding(for tier: ModelTier) -> Binding<Bool> {
+        Binding(
+            get: { draft.is1M(for: tier) },
+            set: { draft.set1M($0, for: tier) }
         )
     }
 

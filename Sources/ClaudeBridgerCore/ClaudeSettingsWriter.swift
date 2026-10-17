@@ -9,6 +9,18 @@ public struct SettingsSnapshot: Equatable, Sendable {
     public var models: [String: String]
     /// Display labels currently set, for the tiers that have a display-name variable.
     public var modelDisplayNames: [String: String]
+    /// Behaviour flags currently set, by key.
+    ///
+    /// Stored as the key/value pairs rather than the enum so the snapshot can report a flag whose
+    /// value is unexpected (`CLAUDE_CODE_ATTRIBUTION_HEADER` set to `1`, say) instead of silently
+    /// dropping it.
+    public var flagValues: [String: String]
+    /// Choice settings currently set, by key.
+    public var choiceValues: [String: String]
+    /// Numeric limits currently set, by key.
+    public var numericValues: [String: String]
+    /// The raw custom-header text, when set.
+    public var customHeaders: String?
     /// Keys from `ManagedEnvironment.clearableKeys` present in `env`.
     public var managedKeysPresent: Set<String>
     /// How many keys the `env` object holds in total, so the screen can say what it is not touching.
@@ -99,6 +111,10 @@ public struct ClaudeSettingsWriter: @unchecked Sendable {
             baseURL: nil,
             models: [:],
             modelDisplayNames: [:],
+            flagValues: [:],
+            choiceValues: [:],
+            numericValues: [:],
+            customHeaders: nil,
             managedKeysPresent: [],
             totalEnvironmentKeys: 0,
             isUnparseable: false,
@@ -147,6 +163,22 @@ public struct ClaudeSettingsWriter: @unchecked Sendable {
                 snapshot.modelDisplayNames[tier.rawValue] = value
             }
         }
+        for flag in EnvironmentFlag.allCases {
+            if let value = document.string(atPath: ["env", flag.key]) {
+                snapshot.flagValues[flag.key] = value
+            }
+        }
+        for choice in EnvironmentChoice.allCases {
+            if let value = document.string(atPath: ["env", choice.key]) {
+                snapshot.choiceValues[choice.key] = value
+            }
+        }
+        for setting in NumericSetting.allCases {
+            if let value = document.string(atPath: ["env", setting.key]) {
+                snapshot.numericValues[setting.key] = value
+            }
+        }
+        snapshot.customHeaders = document.string(atPath: ["env", CustomHeaders.key])
         return snapshot
     }
 
@@ -308,6 +340,46 @@ public struct ClaudeSettingsWriter: @unchecked Sendable {
                     tier.displayName + "的显示名是 " + (actual ?? "未设置") + "，期望 " + (expected ?? "未设置")
                 )
             }
+        }
+        // Flags are compared by key and value, not just presence: an inverted one
+        // (`CLAUDE_CODE_ATTRIBUTION_HEADER`) written with the wrong value would otherwise look
+        // applied while doing the opposite of what the toggle says.
+        for flag in EnvironmentFlag.allCases {
+            let expected = profile.isOn(flag) ? flag.onValue : nil
+            let actual = snapshot.flagValues[flag.key]
+            if expected != actual {
+                problems.append(
+                    flag.displayName + "是 " + (actual ?? "未设置") + "，期望 " + (expected ?? "未设置")
+                )
+            }
+        }
+        for choice in EnvironmentChoice.allCases {
+            let expected = profile.choiceValue(choice)
+            let actual = snapshot.choiceValues[choice.key]
+            if expected != actual {
+                problems.append(
+                    choice.displayName + "是 " + (actual ?? "未设置") + "，期望 " + (expected ?? "未设置")
+                )
+            }
+        }
+        for setting in NumericSetting.allCases {
+            let expected = profile.numericValue(setting)
+            let actual = snapshot.numericValues[setting.key]
+            // User-owned keys are written when a profile asks for them but never removed, so a
+            // value the user left in the file by hand is not a mismatch. Reporting one would put
+            // a warning on every activation of a hand-tuned file, which is the common case.
+            if expected == nil, ManagedEnvironment.userOwnedKeys.contains(setting.key) { continue }
+            if expected != actual {
+                problems.append(
+                    setting.displayName + "是 " + (actual ?? "未设置") + "，期望 " + (expected ?? "未设置")
+                )
+            }
+        }
+        let expectedHeaders = profile.normalizedCustomHeaders
+        if expectedHeaders != snapshot.customHeaders {
+            problems.append(
+                "自定义请求头是 " + (snapshot.customHeaders ?? "未设置") + "，期望 " + (expectedHeaders ?? "未设置")
+            )
         }
         if profile.credentialMode != .none, !credential.isEmpty {
             let key = profile.credentialMode == .authToken

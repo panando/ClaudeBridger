@@ -327,6 +327,14 @@ public final class AppModel: ObservableObject {
                 try document.removeKey(key, inObjectAt: ["env"])
             }
             try AtomicFile.write(document.render(), to: paths.settingsJSON)
+            // The user-owned keys are deliberately left behind, because the app cannot tell the
+            // ones it wrote from the ones the user typed. Silence here would read as a bug.
+            let retained = snapshot.numericValues.keys
+                .filter { ManagedEnvironment.userOwnedKeys.contains($0) }
+                .sorted()
+            if !retained.isEmpty {
+                details.append("以下键属于你自己维护，未删除：" + retained.joined(separator: "、"))
+            }
             updated.activeProfileID = nil
             updated.publishedProfile = nil
             try? store.save(updated)

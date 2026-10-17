@@ -1,10 +1,15 @@
 import SwiftUI
 import ClaudeBridgerCore
 
-struct ContentView: View {
+/// The window's root view. Public so the offscreen screenshot renderer can host it.
+public struct ContentView: View {
     @ObservedObject var model: AppModel
 
-    var body: some View {
+    public init(model: AppModel) {
+        self._model = ObservedObject(wrappedValue: model)
+    }
+
+    public var body: some View {
         NavigationSplitView {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: Tokens.sidebarWidth, ideal: Tokens.sidebarWidth, max: 300)
@@ -52,7 +57,7 @@ struct ContentView: View {
 struct SidebarView: View {
     @ObservedObject var model: AppModel
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             List(selection: Binding(
                 get: { model.selectedProfileID },
@@ -130,7 +135,7 @@ struct ProfileRow: View {
     @ObservedObject var model: AppModel
     let profile: BackendProfile
 
-    var body: some View {
+    public var body: some View {
         HStack(spacing: Tokens.spacingS) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(profile.name)
@@ -162,7 +167,7 @@ struct ProfileRow: View {
 struct DetailView: View {
     @ObservedObject var model: AppModel
 
-    var body: some View {
+    public var body: some View {
         if let draftBinding = Binding($model.draft) {
             VStack(spacing: 0) {
                 ScrollView {
@@ -221,7 +226,7 @@ struct DetailView: View {
 struct StatusLine: View {
     @ObservedObject var model: AppModel
 
-    var body: some View {
+    public var body: some View {
         HStack(spacing: Tokens.spacingS) {
             Image(systemName: model.activeBaseURL == nil ? "circle.dashed" : "arrow.right.circle.fill")
                 .foregroundStyle(model.activeBaseURL == nil ? Color.secondary : Color.green)
@@ -253,7 +258,7 @@ struct ActionBar: View {
 
     private var availability: ActivationAction.Availability { model.activationAvailability }
 
-    var body: some View {
+    public var body: some View {
         HStack(spacing: Tokens.spacingM) {
             Menu {
                 Button(L.restoreOfficial(model.language)) {
@@ -295,7 +300,7 @@ struct ActionBar: View {
 struct EmptyStateView: View {
     @ObservedObject var model: AppModel
 
-    var body: some View {
+    public var body: some View {
         VStack(spacing: Tokens.spacingL) {
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: 40))

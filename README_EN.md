@@ -40,15 +40,25 @@ Fill in an endpoint, a credential and the models, click Activate, and the config
 
 ---
 
-## What 1.0.1 fixes
+## What 1.1.0 adds
 
-Three fixes, each with a regression test:
+The form used to cover "endpoint, credential, models". It now covers the batch of environment variables Claude Code reads for itself as well — while still extending **only the `env` block**. Top-level keys such as `permissions`, `hooks` and `statusLine` remain untouched.
 
-- **A blank detail pane after reopening the app.** A saved configuration was restored, the sidebar showed a row as selected, and the right-hand pane drew the empty state; clicking that row did nothing. The cause: launch restored the selected id but never loaded the corresponding draft, and the pane renders from the draft. Clicking the already-selected row could not recover either, because SwiftUI does not call a selection setter when the value it is given is unchanged.
-- **Deletion had no confirmation.** Deleting now raises a confirmation that says the action cannot be undone, and distinguishes two cases: deleting the backend **in use** tells you that deleting it does **not** revert Claude Code's configuration (that is what "restore official configuration" is for), while deleting an unused one tells you the config file is untouched.
-- **Model display names.** You can now set a display label for the Opus / Sonnet / Haiku / Fable tiers (`ANTHROPIC_DEFAULT_*_MODEL_NAME`). It changes only the text shown in the `/model` picker, not which model is requested. Switching backends clears the previous labels, so the picker can no longer advertise one model while the requests go to another.
+Three new groups, all inside cards that start collapsed so they never get in the way of fill-in-address, fill-in-credential, click-activate:
 
-> Those four variables exist for a reason: Claude Code defines no `ANTHROPIC_MODEL_NAME` and no subagent display-name variable, so the main-conversation and subagent tiers show no such field. Writing a key Claude Code ignores would be worse than writing nothing, because it looks like it works.
+- **Behaviour flags (11)**: non-essential traffic, autoupdater, bundled skills, compaction, 1M context, terminal title, the extra-usage command, experimental Agent Teams, session state events, the attribution block in the system prompt, and the token-usage reminder.
+- **Loading and prompts**: how MCP tools load, and which system prompt length to use. Neither of these is a plain on/off — "unset" is itself a distinct, meaningful value — so they are pickers rather than switches.
+- **Timeouts and limits**: max output tokens, API timeout, Bash timeout, the auto-compaction percentage, and custom request headers (multi-line `Name: Value`, which relay services frequently need).
+
+Every flag carries its **provenance**: ones found in the official documentation are labelled as such, and ones seen only in third-party clients are labelled "third-party implementation" and default to off — the app will not switch on something it has not verified. Each model tier also gains a **1M checkbox**. It adds no stored field; it just adds or removes the `[1m]` suffix on the model string, so an existing `deepseek-v4-pro[1m]` opens already ticked.
+
+### A data-loss bug caught on the way
+
+Widening the managed-key set nearly introduced a silent one. Four keys — `API_TIMEOUT_MS`, `BASH_MAX_TIMEOUT_MS`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` — are ones people tune by hand; the file this was checked against had `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "87"` set manually. Treated as ordinary managed keys, they would have been **silently deleted** on the next backend switch.
+
+Those four are now **user-owned**: a profile may write them, but they are **never cleared** — not by a backend switch, not by restoring the official configuration. When you do restore, the confirmation lists which keys were left in place because they are yours, rather than letting you discover the difference later.
+
+> 1.0.1 fixed three other things: a blank detail pane after reopening the app, deletion without a confirmation, and model display names (`ANTHROPIC_DEFAULT_*_MODEL_NAME`, which change only the text in the `/model` picker and not which model is requested).
 
 ---
 
@@ -69,8 +79,11 @@ ClaudeBridger turns that chain into one click, with a backup before the write an
 
 ## Features
 
-**It rewrites only the twelve env keys that do the wiring; everything else survives byte for byte.**
+**It rewrites only the 33 managed env keys; everything else survives byte for byte.**
 The `env` block is a general-purpose environment for Claude Code and every subprocess it starts, so a user may well keep a proxy setting, a timeout or their own variables there. The built-in JSON editor records the byte span of each value and replaces only the spans it was asked to — changing a value touches one line, adding a key inserts one line. A test asserts that a value replacement differs from the original in exactly one line. Hand-written comments, trailing commas and indentation style all survive.
+
+**Four keys belong to you, not to the app.**
+`API_TIMEOUT_MS`, `BASH_MAX_TIMEOUT_MS`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS` and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` are the ones most often edited by hand. A profile may write them, but they are **never deleted** — not by a switch, not by a restore. Switching backends clears the keys the previous backend left behind, except these four.
 
 **Every write is backed up first, including switches between two backends this app manages.**
 The one destructive action always has a way back. Backup filenames carry the backend and a timestamp, and a second backup within the same minute gets a numeric suffix rather than overwriting the first.
@@ -91,7 +104,7 @@ Claude Code picks a different model per situation, and configuring only the main
 </p>
 
 <p align="center">
-  <img src="docs/images/app-form.png" alt="The backend form: a Base URL section with name, address, credential header and credential; a Models section with one field per tier; and an Advanced section with context window, effort level and a switch for non-essential traffic" width="620">
+  <img src="docs/images/app-options.png" alt="The backend form with its option groups open: Base URL, Models (each tier with a 1M checkbox and a display name), Advanced (context window, effort level), and the collapsed-by-default Behaviour flags card — eleven switches each carrying a provenance label and an explanation, with the one undocumented key in its own group marked third-party — plus the Loading and prompts card" width="760">
 </p>
 
 The interface is bilingual and follows the system language.
@@ -121,7 +134,7 @@ Setting `CLAUDE_CONFIG_DIR` moves the first file, and ClaudeBridger follows that
 
 ### Download
 
-Download `ClaudeBridger-1.0.0.dmg` from [Releases](https://github.com/panando/ClaudeBridger/releases), open it, and drag ClaudeBridger into your Applications folder.
+Download `ClaudeBridger-1.1.0.dmg` from [Releases](https://github.com/panando/ClaudeBridger/releases), open it, and drag ClaudeBridger into your Applications folder.
 
 ### macOS will block the first launch (the app is not developer-signed)
 
@@ -184,13 +197,14 @@ To see exactly what was written, run `/status` inside Claude Code and check the 
 
 ### The environment variables it writes
 
-ClaudeBridger writes only the keys below. Nothing else in the `env` block is touched.
+ClaudeBridger writes only the 33 keys below. Nothing else in the `env` block is touched.
+
+**Wiring (13)**
 
 | Variable | Comes from |
 | --- | --- |
 | `ANTHROPIC_BASE_URL` | The Base URL field |
 | `ANTHROPIC_AUTH_TOKEN` | The credential, when Bearer Token is selected |
-| `ANTHROPIC_API_KEY` | The credential, when API Key is selected |
 | `ANTHROPIC_MODEL` | Main conversation |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL` | Opus tier |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL_NAME` | Opus tier display label (affects only the `/model` picker) |
@@ -201,12 +215,53 @@ ClaudeBridger writes only the keys below. Nothing else in the `env` block is tou
 | `ANTHROPIC_DEFAULT_FABLE_MODEL` | Fable tier (automatic fallback) |
 | `ANTHROPIC_DEFAULT_FABLE_MODEL_NAME` | Fable tier display label (affects only the `/model` picker) |
 | `CLAUDE_CODE_SUBAGENT_MODEL` | Subagents |
-| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Context window |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Context window |
-| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | The "disable non-essential traffic" switch |
-| `CLAUDE_CODE_EFFORT_LEVEL` | Effort level |
+| `ANTHROPIC_CUSTOM_HEADERS` | Custom request headers (multi-line `Name: Value`) |
 
 `ANTHROPIC_API_KEY` is special: it can only ever be **removed**, never written. Having it alongside `ANTHROPIC_AUTH_TOKEN` causes 401s, so switching to Bearer Token always clears any leftover.
+
+**Behaviour flags (11)**
+
+The "disable" keys write `1`. `CLAUDE_CODE_ATTRIBUTION_HEADER` is inverted — turning the "omit the attribution block" switch on writes `0`. Turning a switch off writes nothing at all, so a key left by a previous backend is cleared on the next activation.
+
+| Variable | The switch in the form | Provenance |
+| --- | --- | --- |
+| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | Disable non-essential traffic | Official docs |
+| `DISABLE_AUTOUPDATER` | Disable the autoupdater | Official docs |
+| `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS` | Disable bundled skills | Official docs |
+| `DISABLE_COMPACT` | Disable compaction | Official docs |
+| `CLAUDE_CODE_DISABLE_1M_CONTEXT` | Disable 1M context | Official docs |
+| `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` | Leave the terminal title alone | Official docs |
+| `DISABLE_EXTRA_USAGE_COMMAND` | Disable the extra-usage command | Official docs |
+| `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` | Experimental Agent Teams | Official docs |
+| `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS` | Emit session state events | Official docs |
+| `CLAUDE_CODE_ATTRIBUTION_HEADER` | Omit the attribution block (writes `0`) | Official docs |
+| `CLAUDE_CODE_TOTAL_TOKENS_REMINDER` | Disable the token-usage reminder (writes `off`) | **Third-party implementation** |
+
+**Loading and prompts (2)**
+
+| Variable | Values |
+| --- | --- |
+| `ENABLE_TOOL_SEARCH` | `true` / `auto` / `auto:5` / `false` / unset |
+| `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT` | `1` / `0` / unset |
+
+**Timeouts and limits (4)**
+
+| Variable | Field | Unit |
+| --- | --- | --- |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS` | Max output tokens | tokens |
+| `API_TIMEOUT_MS` | API timeout | ms |
+| `BASH_MAX_TIMEOUT_MS` | Bash timeout | ms |
+| `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | Auto-compaction trigger percentage | 1–100 |
+
+These four are **user-owned**: written but never removed. See [Safety design](#safety-design).
+
+**Other (3)**
+
+| Variable | Field |
+| --- | --- |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Context window |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Context window |
+| `CLAUDE_CODE_EFFORT_LEVEL` | Effort level |
 
 ### Do not put `/v1` in the Base URL
 
@@ -224,9 +279,21 @@ This maps to `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and `CLAUDE_CODE_MAX_CONTEXT_TOKE
 
 This is the one section worth reading closely, because everything the app does replaces configuration you are currently using.
 
-### It touches only the keys that do the wiring
+### It touches only the managed keys
 
-See the variable table above. Everything else — `HTTPS_PROXY`, `API_TIMEOUT_MS`, `permissions`, `hooks`, `statusLine`, your own variables — survives byte for byte. That is verified rather than asserted: a test checks that replacing one value differs from the original text in exactly one line.
+See the variable table above — 33 of them as of 1.1.0. Everything else — `HTTPS_PROXY`, `permissions`, `hooks`, `statusLine`, your own variables — survives byte for byte. That is verified rather than asserted: a test checks that replacing one value differs from the original text in exactly one line.
+
+The boundary growing from 16 keys to 33 is worth stating plainly rather than glossing over, because the managed-key set *is* this app's safety boundary, and a wider boundary means it can touch more. Everything added is still a Claude Code configuration variable; not one of them is a generic user variable. The boundary test enumerates key names one by one, so widening it has to be an explicit edit rather than something that arrives as a side effect.
+
+### Four user-owned keys are never cleared
+
+`API_TIMEOUT_MS`, `BASH_MAX_TIMEOUT_MS`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`.
+
+What these four share is that people tune them by hand, for reasons unrelated to which backend they are pointed at. So the rule is **write if asked, never delete**. Switching backends clears the keys the previous backend left behind, and these four stay.
+
+They go through exactly the same write path as any other key; the only difference is which set the removal step walks. Read-back verification relaxes to match: a value present in the file that the form does not set is **not** a mismatch for these four. Otherwise every activation of a hand-tuned file would raise a warning.
+
+That rule was forced by an end-to-end run: the write was correct, and verification immediately reported "the auto-compaction trigger percentage is 87, expected unset". Two halves of one rule disagreeing is exactly how that surfaces.
 
 ### It refuses rather than "repairs"
 
@@ -299,7 +366,7 @@ Requires the Xcode command line tools (Swift 5.9+).
 
 ```bash
 swift build            # build
-swift test             # 129 tests
+swift test             # 179 tests
 swift run ClaudeBridger
 ```
 
@@ -309,10 +376,18 @@ Packaging:
 
 ```bash
 ./scripts/build-app.sh     # produces build/ClaudeBridger.app
-./scripts/build-dmg.sh     # produces build/ClaudeBridger-1.0.0.dmg
+./scripts/build-dmg.sh     # produces build/ClaudeBridger-1.1.0.dmg
 ```
 
 `build-dmg.sh` mounts the image back after building and checks that the executable is present, the `/Applications` symlink exists, and the version matches `VERSION`.
+
+The screenshots in this README are build output too, not hand-taken:
+
+```bash
+./scripts/render-screenshots.sh    # re-renders docs/images/*.png
+```
+
+`swift run ScreenshotRenderer` hosts the real views in an **offscreen** `NSWindow` and asks for the bitmap: `screencapture` needs the Screen Recording permission, and SwiftUI's `ImageRenderer` refuses to draw `NavigationSplitView` and `List`. It runs against a throwaway `CLAUDE_CONFIG_DIR` and never touches your real `~/.claude`. It is not included in the app bundle.
 
 ### Tests
 
@@ -328,6 +403,7 @@ These groups are worth running on their own, because they guard the reason this 
 swift test --filter JSONDocumentTests          # the editor touches only the bytes it should
 swift test --filter ClaudeSettingsWriterTests  # your configuration survives a switch
 swift test --filter ManagedEnvironmentTests    # the safety boundary has not quietly widened
+swift test --filter ConfigurationOptionTests   # flags, the 1M suffix, migration, custom headers
 swift test --filter AppModelTests              # which action writes which file
 ```
 
@@ -335,8 +411,10 @@ swift test --filter AppModelTests              # which action writes which file
 
 - **CLI only.** The desktop app uses a different mechanism; see [What it applies to](#what-it-applies-to).
 - **Some Claude Code features stop working behind a third-party endpoint.** This is Claude Code's own behaviour: once `ANTHROPIC_BASE_URL` points at a non-official host, MCP tool search is off by default, Remote Control is unavailable, and pricing display is wrong.
+  The MCP tool search one **can now be turned back on yourself**: open the "Loading and prompts" card and set how MCP tools load to `true`, which writes `ENABLE_TOOL_SEARCH=true`. The difference is measured, not assumed — see [What was verified by experiment](#what-was-verified-by-experiment). The other two still have no workaround.
 - **Anthropic neither forbids nor supports third-party gateways.** The official documentation says it does not endorse, maintain or audit third-party gateway products, and does not support routing Claude Code to non-Claude models through any gateway. The trend has been toward tightening: the desktop app gained a model-name allowlist, and the CLI changed gateway model discovery from on-by-default to manual opt-in. Relying on this path means accepting it may get harder.
 - **Model names in the presets will go stale.** Endpoints are relatively stable; model names are not.
+- **One switch is not guaranteed to work.** `CLAUDE_CODE_TOTAL_TOKENS_REMINDER` has only been seen in third-party clients and is not in the official documentation, so it may stop working in any release. It sits in its own group in the interface, labelled "third-party implementation", and defaults to off.
 - **Not notarised.** The first launch needs a manual allow; see [Install](#install).
 - **Whether `CLAUDE_CONFIG_DIR` also moves `~/.claude.json` is unverified**; see [The two files it writes](#the-two-files-it-writes).
 - **No reverse import.** You can only create backends from a preset; it cannot read an existing `settings.json` and recognise it as a backend.
@@ -349,6 +427,20 @@ These are not transcribed from documentation — they were run:
 - Captured traffic confirmed the request path is `/v1/messages?beta=true` and the authentication header is `Authorization: Bearer <token>`.
 - The `[1m]` suffix in `deepseek-v4-pro[1m]` was confirmed to be stripped by the CLI before the request, with the vendor receiving `deepseek-v4-pro`.
 - After a write, `$schema`, `permissions` and user-defined `env` variables were confirmed to survive byte for byte.
+
+Every key added in 1.1.0 was captured individually against a local mock endpoint on the same CLI version:
+
+| Key written | What was captured | Control |
+| --- | --- | --- |
+| `ANTHROPIC_CUSTOM_HEADERS` | `X-Relay-Tag: claudebridger-e2e` present on the request | — |
+| `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000` | body `max_tokens: 64000` | `32000` when unset |
+| `CLAUDE_CODE_ATTRIBUTION_HEADER=0` | the attribution line at the head of the system prompt is gone | present when unset: `x-anthropic-billing-header: cc_version=2.1.299.4fa; cc_entrypoint=sdk-cli;` |
+| `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT=1` | system prompt is 5723 characters | 27341 characters when unset |
+| `ENABLE_TOOL_SEARCH=true` | 12 tools, including `ToolSearch` and `DeferredToolPlaceholder`, with MCP tools not inlined | 25 tools when unset, with the MCP tool inlined into the request as `mcp__<server>__<tool>` |
+
+That last row is worth expanding, because it resolves one of the known limitations. With `ENABLE_TOOL_SEARCH` unset — the default state behind a third-party endpoint — the full definition of every MCP tool is sent on **every request**. Set to `true`, they are retrieved on demand instead; the measured tool count dropped from 25 to 12.
+
+The user-owned-key rule was verified the same way: on a configuration holding a hand-written `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "87"`, activating a backend left the value at `87`, and running "restore official configuration" afterwards still left it at `87` while removing all 30 clearable keys the app had written.
 
 ## License
 
